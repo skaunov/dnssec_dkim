@@ -1,6 +1,5 @@
-// use dep::bignum::{params::BigNumParams, RuntimeBigNum};
-
 // due to the bug with the RSA we don't need a function for a TLD yet; hence can think that DS is always a thing
+// use dep::bignum::{params::BigNumParams, RuntimeBigNum};
 
 use dep::aztec::macros::aztec;
 #[aztec]
@@ -10,93 +9,163 @@ pub contract Main {
     // fn quadruple(x: Field) -> pub Field { double(double(x)) }
 
     use std::{meta::derive, ops::{Add, Sub}};
-    use dep::aztec::macros::storage::storage;
-    use dep::aztec::prelude::Map;
+    use dep::aztec::macros::{storage::storage, functions::{initializer, internal, private, public, utility, view}};
     use dep::aztec::protocol_types::traits::{FromField, ToField, Hash};
+    use dep::aztec::prelude::{AztecAddress, Map, PublicContext, PublicImmutable, PublicMutable};
 
     // TODO add `pub` and correct algorithm suffixes
-    type P256Key = [u8; 64];
-    // #[derive(Hash)]
-    type Domain<NUM_LABELS: Field> = [str, NUM_LABELS];
-    // #[derive(Hash)]
-    struct ZoneKeyId<NUM_LABELS: Field> {
-        domain: Domain<NUM_LABELS>,
-        validity_to_from: (Field, Field),
-        // tag: Field
-    }
-    // #[derive(Hash)]
-    struct DkimKeySelectorId<NUM_LABELS: Field> {
-        selector: str, 
-        domain: Domain<NUM_LABELS>,
-        // (Field, Field) // Validity time window
-    };
-    // #[derive(Hash)]
-    struct DkimKeyDefaultId<NUM_LABELS: Field> {
-        domain: Domain<NUM_LABELS>,
-        validity_to_from: (Field, Field),
-    }
-    // #[derive(Hash)]
-    struct DsId<NUM_LABELS: Field> {
-        child: str,
-        parent: Domain<NUM_LABELS - 1>,
-    }
-
-    type DomainDigest = Field;
+    // type P256Key = [u8; 64];
+    // // #[derive(Hash)]
+    // type Domain<NUM_LABELS: Field> = [str, NUM_LABELS];
+    // // #[derive(Hash)]
+    // struct ZoneKeyId<NUM_LABELS: Field> {
+    //     domain: Domain<NUM_LABELS>,
+    //     validity_to_from: (Field, Field),
+    //     // tag: Field
+    // }
+    // // #[derive(Hash)]
+    // struct DkimKeySelectorId<NUM_LABELS: Field> {
+    //     selector: str, 
+    //     domain: Domain<NUM_LABELS>,
+    //     // (Field, Field) // Validity time window
+    // };
+    // // #[derive(Hash)]
+    // struct DkimKeyDefaultId<NUM_LABELS: Field> {
+    //     domain: Domain<NUM_LABELS>,
+    //     validity_to_from: (Field, Field),
+    // }
+    // // #[derive(Hash)]
+    // struct DsId<NUM_LABELS: Field> {
+    //     child: str,
+    //     parent: Domain<NUM_LABELS - 1>,
+    // }
+    // type DomainDigest = Field;
+    type Ksigk = [u8; 64];
 
     #[storage]
     struct Storage<Context> {
         // TODO I'm thinking about establish a bit complex tree structure and just provide getters for the API
         // starting from `["com"]` TODO _from `[]`_
         // as DNSSEC uses different algorithms a `Map` sig-key value is a `Vec<u8>` to represent all of them
-        registry_ds: dep::aztec::prelude::Map<DomainDigest, Ds, Context>,
-        registry_keysigkey: Map<Field, Ksigk>,
-        registry_zonesigkey: Map<Field, Zsigk>,
-        registry_dkimkey_selector: Map<Field, Map<
-            Field, // a DKIM-key digest
-            (
-                DkimKey,
-                bool, // is revoked
-                Field, // no later
-                Field, // not before
-            )
-        >>
-        // registry_dkimkey_default = Map<DomainDigest, Map<
+        // registry_ds: Map<DomainDigest, Ds, Context>,
+        registry_keysigkey: Map<Field, Map<Field, (
+            Ksigk,
+            bool, // is revoked
+        ), Context>, Context>,
+        // registry_zonesigkey: Map<Field, Zsigk>,
+        // registry_dkimkey_selector: Map<Field, Map<
         //     Field, // a DKIM-key digest
-        //     DkimKey
+        //     (
+        //         DkimKey,
+        //         bool, // is revoked
+        //         Field, // no later
+        //         Field, // not before
+        //     )
         // >>
     }
 
-    pub fn add_zsigk_ecdsa256sha256(
-        /// take this from a verified source
-        ksigk: P256Key,
-
-        // other args will be checked
-
-        ksigk_rrset_position: u32,
-        // delegationsigner: _,
-        rrset_dnskey: Vec<u8>,
-        rrsig_dnskey: P256Key,
-        zsigk: P256Key,
-        zsigk_rrset_position: u32,
-        // time and tag shouldn't go here -- deal with it downstream in a contract
-    ) {
-        for i in 0..63 {
-            rrset_dnskey[ksigk_rrset_position + i] = ksigk[i];
-            rrset_dnskey[zsigk_rrset_position + i] = zsigk[i];
-        }
-
-        assert(std::ecdsa_secp256r1::verify_signature(ksigk[0..31], ksigk[31..], rrsig_dnskey, dep::sha256::sha256_var(rrset_dnskey, rrset_dnskey.len())));
+    #[public] #[initializer]
+    fn initialize() {
+        let ksk = [
+            183,
+            31,
+            4,
+            101,
+            16,
+            29,
+            219,
+            226,
+            191,
+            12,
+            148,
+            85,
+            209,
+            47,
+            161,
+            108,
+            28,
+            218,
+            68,
+            244,
+            191,
+            27,
+            162,
+            85,
+            52,
+            24,
+            173,
+            31,
+            58,
+            169,
+            176,
+            105,
+            115,
+            242,
+            27,
+            132,
+            235,
+            83,
+            44,
+            244,
+            3,
+            94,
+            232,
+            212,
+            131,
+            44,
+            162,
+            109,
+            137,
+            48,
+            106,
+            125,
+            50,
+            86,
+            12,
+            12,
+            176,
+            18,
+            157,
+            69,
+            10,
+            193,
+            8,
+            53,
+        ]; // "com."
+        storage.registry_keysigkey.at(["com"]).insert(context, ksk.hash(), (ksk, false));
     }
 
-    pub fn add_ds_ecdsa(
-        /// take this from a verified source
-        parent_zsigk: ([u8; 32], [u8; 32]),
-        
-        ds_rrset: Vec<u8>,
-        child_ksigk: ([u8; 32], [u8; 32]),
-    ) {}
+    // pub fn add_zsigk_ecdsa256sha256(
+    //     /// take this from a verified source
+    //     ksigk: P256Key,
 
-    pub fn add_dkim_ecdsa() {}
+    //     // other args will be checked
+
+    //     ksigk_rrset_position: u32,
+    //     // delegationsigner: _,
+    //     rrset_dnskey: Vec<u8>,
+    //     rrsig_dnskey: P256Key,
+    //     zsigk: P256Key,
+    //     zsigk_rrset_position: u32,
+    //     // time and tag shouldn't go here -- deal with it downstream in a contract
+    // ) {
+    //     for i in 0..63 {
+    //         rrset_dnskey[ksigk_rrset_position + i] = ksigk[i];
+    //         rrset_dnskey[zsigk_rrset_position + i] = zsigk[i];
+    //     }
+
+    //     assert(std::ecdsa_secp256r1::verify_signature(ksigk[0..31], ksigk[31..], rrsig_dnskey, dep::sha256::sha256_var(rrset_dnskey, rrset_dnskey.len())));
+    // }
+
+    // pub fn add_ds_ecdsa(
+    //     /// take this from a verified source
+    //     parent_zsigk: ([u8; 32], [u8; 32]),
+        
+    //     ds_rrset: Vec<u8>,
+    //     child_ksigk: ([u8; 32], [u8; 32]),
+    // ) {}
+
+    // pub fn add_dkim_ecdsa() {}
 }
 
 #[test]
@@ -382,25 +451,25 @@ fn test_ecdsa_com_dnskey() {
 }
 
 
-#[test]
-fn test_rsa() {
-    let params: BigNumParams<9, 1024> = BigNumParams::new(
-        false,
-        [0x9b5f6367e94c0d47502451357be1b5, 0x2cf79e792ab501e6a8a1ca519af2cb, 0x3af9c9fc1c5466fb684cf009d7197c, 0xe2941992548cee0d67dd4547e11dd6, 0xcb8d5735b9321db085f1b8e2d8038f, 0xbe4ab0caea759e2f773a1f9029c73e, 0xbeb2aaa5b3778d6eebfba6bf9ea191, 0x2f21681bf6d6aba555032bf6f9f036, 0xc5d232c7c1537c79f4b7ac28ff1168],
-        [0x76587ae99144b02f5c0561abe7b171, 0x572705d030eba70862781acd71f9db, 0xbf7332c0b01314b98e6e4b4e779bb7, 0x1fcde23d91266af32660e5a1c07804, 0xf2f65cfe7bb21f91c71480ddc7e187, 0xd5a265ca080f426885f31564eb35a5, 0x3c9aa2fe848c273cd5f5248fd1eeb1, 0xe3665a614a6a26b98594f893a7eba8, 0xab2d9c34eba3f025bc64776b917622]
-    );
-    let signature: RuntimeBigNum<9, 1024> = RuntimeBigNum::from_array(
-        params,
-        [0x8e24b00c41f4f76c69edc9794e596d, 0xf56024369222a279178234d9b256b8, 0x21c8dbe808e3c0e9c5968deb4d8126, 0x25550a447219a6b82f7b48f722034c, 0x1d90802722814b6b8f1d01c6ebbfe3, 0x7bcc51de0c8b896cd4f3403eadcec8, 0x57e9e8bcb4979c3e3aa4b7eca8e475, 0x1363a2f15f0187cb42739e0c78cc4e, 0xaef740a3591cf9c63ae660790309c8]
-    );
-    assert(
-        dep::noir_rsa::rsa::verify_sha256_pkcs1v15(
-            [9, 77, 116, 176, 84, 37, 6, 44, 24, 67, 19, 129, 158, 130, 151, 108, 31, 225, 126, 224, 106, 117, 67, 255, 37, 232, 114, 47, 53, 50, 58, 197],
-            signature,
-            65537
-        )
-    );
-}
+// #[test]
+// fn test_rsa() {
+//     let params: BigNumParams<9, 1024> = BigNumParams::new(
+//         false,
+//         [0x9b5f6367e94c0d47502451357be1b5, 0x2cf79e792ab501e6a8a1ca519af2cb, 0x3af9c9fc1c5466fb684cf009d7197c, 0xe2941992548cee0d67dd4547e11dd6, 0xcb8d5735b9321db085f1b8e2d8038f, 0xbe4ab0caea759e2f773a1f9029c73e, 0xbeb2aaa5b3778d6eebfba6bf9ea191, 0x2f21681bf6d6aba555032bf6f9f036, 0xc5d232c7c1537c79f4b7ac28ff1168],
+//         [0x76587ae99144b02f5c0561abe7b171, 0x572705d030eba70862781acd71f9db, 0xbf7332c0b01314b98e6e4b4e779bb7, 0x1fcde23d91266af32660e5a1c07804, 0xf2f65cfe7bb21f91c71480ddc7e187, 0xd5a265ca080f426885f31564eb35a5, 0x3c9aa2fe848c273cd5f5248fd1eeb1, 0xe3665a614a6a26b98594f893a7eba8, 0xab2d9c34eba3f025bc64776b917622]
+//     );
+//     let signature: RuntimeBigNum<9, 1024> = RuntimeBigNum::from_array(
+//         params,
+//         [0x8e24b00c41f4f76c69edc9794e596d, 0xf56024369222a279178234d9b256b8, 0x21c8dbe808e3c0e9c5968deb4d8126, 0x25550a447219a6b82f7b48f722034c, 0x1d90802722814b6b8f1d01c6ebbfe3, 0x7bcc51de0c8b896cd4f3403eadcec8, 0x57e9e8bcb4979c3e3aa4b7eca8e475, 0x1363a2f15f0187cb42739e0c78cc4e, 0xaef740a3591cf9c63ae660790309c8]
+//     );
+//     assert(
+//         dep::noir_rsa::rsa::verify_sha256_pkcs1v15(
+//             [9, 77, 116, 176, 84, 37, 6, 44, 24, 67, 19, 129, 158, 130, 151, 108, 31, 225, 126, 224, 106, 117, 67, 255, 37, 232, 114, 47, 53, 50, 58, 197],
+//             signature,
+//             65537
+//         )
+//     );
+// }
 
 // #[test]
 // fn test_() {

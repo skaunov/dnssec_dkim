@@ -1,0 +1,16 @@
+[package]
+name = "dkim_registry_dnssec"
+type = "contract"
+authors = ["skaunov"]
+
+[dependencies]
+# can't decode =/
+# base64 = { tag = "v0.1.2", git = "https://github.com/zkworks-xyz/noir-base64" }
+# is outdated?
+# noir_base64_lib = { tag = "v1.0.0", git = "https://github.com/Envoy-VC/noir_base64_lib" }
+
+# noir_rsa = { tag = "v0.7.0", git = "https://github.com/noir-lang/noir_rsa" }
+# bignum = {tag = "v0.6.0", git = "https://github.com/noir-lang/noir-bignum"}
+sha256 = { tag = "v0.1.0", git = "https://github.com/noir-lang/sha256" }
+
+aztec = { tag = "v0.86.0", git = "https://github.com/AztecProtocol/aztec-packages", directory="noir-projects/aztec-nr/aztec" }

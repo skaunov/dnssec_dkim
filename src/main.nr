@@ -9,6 +9,7 @@ pub contract Main {
     // fn quadruple(x: Field) -> pub Field { double(double(x)) }
 
     use std::meta::derive;
+    use std::hash::pedersen_hash;
     use dep::aztec::macros::{storage::storage, functions::{initializer, internal, private, public, utility, view}};
     use dep::aztec::protocol_types::traits::{FromField, ToField, Packable}; // {Deserialize, Hash, Serialize}
     use dep::aztec::prelude::{AztecAddress, Map, PublicContext, PublicImmutable, PublicMutable};
@@ -22,28 +23,41 @@ pub contract Main {
     type Fqdn = BoundedVec<u8, FqdnMaxLen>; 
     
     // #[derive(Packable)]
-    struct Len64DnsKey {
+    struct Bytes64DnsKey {
         domain: Fqdn, 
-        key: Ksigk
+        key: [u8; 64]
         // validity_to_from: (Field, Field),
         // tag: Field
     }
     // TODO quite some space for optimization here
-    impl Packable<64 + 1 + FqdnMaxLen> for Len64DnsKey {
-        fn pack(self) -> [Field; 64 + 1 + FqdnMaxLen] {
+    /*      it's really awful now, but with packed string this would be orders better
+            also moving the keys itself to a distributed storage so that only digest and revocation live here 
+    while the key only enter as an argument */
+    global LenPacked64DnsKey: u32 = 64 + 1 + FqdnMaxLen;
+    impl Packable<LenPacked64DnsKey> for Bytes64DnsKey {
+        fn pack(self) -> [Field; LenPacked64DnsKey] {
             let l = self.domain.len();
-            let mut r = [0; 64 + 1 + FqdnMaxLen];
+            let mut r = [0; LenPacked64DnsKey - 64];
             for i in 0..l {
-                r[i] = self.domain.get(i);
+                r[i] = self.domain.get(i) as Field;
             }
-            r[FqdnMaxLen] = 
+            r[FqdnMaxLen] = l as Field;
             
-            self.key.map(|b| b as Field).concat([l as Field]).concat()
-
-            r
+            r.concat(self.key.map(|b| b as Field))
         }
-        fn unpack(packed: [Field; N]) -> Self {
-            BoundedVec::from_array(packed)
+        fn unpack(packed: [Field; LenPacked64DnsKey]) -> Self {
+            let mut d: [u8; FqdnMaxLen] = [0; FqdnMaxLen];
+            let mut key: Ksigk = [0; 64];
+            for i in 0..FqdnMaxLen {d[i] = packed[i] as u8;}
+            for i in 0..64 {key[i] = packed[i + FqdnMaxLen + 1] as u8;}
+            Bytes64DnsKey{
+                domain: BoundedVec::from_parts_unchecked(
+                    // &packed[0..FqdnMaxLen].map(|e| e as u8).as_array(), 
+                    d, packed[FqdnMaxLen] as u32
+                ),//.map(|e| e as u8), 
+                // key: &packed[(FqdnMaxLen + 1)..].map(|e| e as u8).as_array()
+                key
+            }
         }
     }
 
@@ -64,7 +78,6 @@ pub contract Main {
     //     parent: Domain<NUM_LABELS - 1>,
     // }
     // type DomainDigest = Field;
-    type Ksigk = [u8; 64];
 
     #[dep::aztec::macros::storage::storage]
     struct Storage<Context> {
@@ -76,7 +89,13 @@ pub contract Main {
         keysigkey_64bytes: Map<
             // I thought to key the `Map` with (Fqdn, Ksigk), but there's [no `#[derive(Hash)]` anymore](https://discord.com/channels/1113924620781883405/1359702206873604260/1368975601767288902)
             Field,
-            PublicMutable<bool, Context>, // is revoked
+            PublicMutable<
+                // (
+                //     Bytes64DnsKey,
+                    bool, // is revoked
+                // ), 
+                Context
+            >,
             Context
         >,
 
@@ -94,7 +113,7 @@ pub contract Main {
 
     #[public] #[initializer]
     fn initialize() {
-        storage.keysigkey_64bytes.at(std::hash::pedersen_hash(Len64DnsKey{
+        let the = Bytes64DnsKey{
             domain: BoundedVec::from_array("com.".as_bytes()),
             key: [
                 183 as u8,
@@ -162,30 +181,44 @@ pub contract Main {
                 8 as u8,
                 53 as u8,
             ]
-        }.pack())).write(false);
+        }.pack();
+        storage.keysigkey_64bytes.at(pedersen_hash(the)).write(
+            // (
+            //     the, 
+                false
+            // )
+        );
     }
 
-    // pub fn add_zsigk_ecdsa256sha256(
-    //     /// take this from a verified source
-    //     ksigk: P256Key,
+    struct DnskeyRecord {
+        domain: Fqdn,
+        
+    }
+    
+    #[public]
+    fn add_zsigk_ecdsa256sha256(
+        /// take this from a verified source
+        ksigk: Bytes64DnsKey,
 
-    //     // other args will be checked
+        // other args will be checked
 
-    //     ksigk_rrset_position: u32,
-    //     // delegationsigner: _,
-    //     rrset_dnskey: Vec<u8>,
-    //     rrsig_dnskey: P256Key,
-    //     zsigk: P256Key,
-    //     zsigk_rrset_position: u32,
-    //     // time and tag shouldn't go here -- deal with it downstream in a contract
-    // ) {
-    //     for i in 0..63 {
-    //         rrset_dnskey[ksigk_rrset_position + i] = ksigk[i];
-    //         rrset_dnskey[zsigk_rrset_position + i] = zsigk[i];
-    //     }
+        ksigk_rrset_position: u32,
+        // delegationsigner: _,
+        rrset_dnskey: Vec<u8>,
+        rrsig_dnskey: [u8; 64],
+        zsigk: [u8; 64],
+        zsigk_rrset_position: u32,
+        // time and tag shouldn't go here -- deal with it downstream in a contract
+    ) {
+        assert(!storage.keysigkey_64bytes.at(pedersen_hash(ksigk)), "add the _key signing key_ first");
 
-    //     assert(std::ecdsa_secp256r1::verify_signature(ksigk[0..31], ksigk[31..], rrsig_dnskey, dep::sha256::sha256_var(rrset_dnskey, rrset_dnskey.len())));
-    // }
+        for i in 0..63 {
+            rrset_dnskey[ksigk_rrset_position + i] = ksigk.key[i];
+            rrset_dnskey[zsigk_rrset_position + i] = zsigk[i];
+        }
+
+        assert(std::ecdsa_secp256r1::verify_signature(ksigk.key[0..31], ksigk.key[31..63], rrsig_dnskey, dep::sha256::sha256_var(rrset_dnskey, rrset_dnskey.len())));
+    }
 
     // pub fn add_ds_ecdsa(
     //     /// take this from a verified source

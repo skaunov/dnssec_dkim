@@ -8,7 +8,7 @@ pub contract Main {
     // fn triple(x: Field) -> pub Field { x * 3 }
     // fn quadruple(x: Field) -> pub Field { double(double(x)) }
 
-    use std::{meta::derive, ops::{Add, Sub}};
+    use std::meta::derive;
     use dep::aztec::macros::{storage::storage, functions::{initializer, internal, private, public, utility, view}};
     use dep::aztec::protocol_types::traits::{FromField, ToField, Hash};
     use dep::aztec::prelude::{AztecAddress, Map, PublicContext, PublicImmutable, PublicMutable};
@@ -17,16 +17,14 @@ pub contract Main {
     // type P256Key = [u8; 64];
     // // #[derive(Hash)]
     
-    // TODO optimize `BoundedVec<str<63>, 243>,`
-    global MLEN: u32 = 243;
-    // type Domain<NUM_LABELS: Field> = [str, NUM_LABELS]; 
+    type Fqdn = BoundedVec<u8, 253 - 10 - 2>; 
     
-    // // #[derive(Hash)]
-    // struct ZoneKeyId<NUM_LABELS: Field> {
-    //     domain: Domain<NUM_LABELS>,
-    //     validity_to_from: (Field, Field),
+    // #[derive(Hash)]
+    // struct Len64DnsKey (
+    //     Fqdn, Ksigk
+    //     // validity_to_from: (Field, Field),
     //     // tag: Field
-    // }
+    // )
     // // #[derive(Hash)]
     // struct DkimKeySelectorId<NUM_LABELS: Field> {
     //     selector: str, 
@@ -46,18 +44,19 @@ pub contract Main {
     // type DomainDigest = Field;
     type Ksigk = [u8; 64];
 
-    #[storage]
+    #[dep::aztec::macros::storage::storage]
     struct Storage<Context> {
         // TODO I'm thinking about establish a bit complex tree structure and just provide getters for the API
         // starting from `["com"]` TODO _from `[]`_
         // as DNSSEC uses different algorithms a `Map` sig-key value is a `Vec<u8>` to represent all of them
         // registry_ds: Map<DomainDigest, Ds, Context>,
         
-        registry_keysigkey: Map<Field, (
-            BoundedVec<str<63>, MLEN>,
-            Ksigk,
-            bool, // is revoked
-        ), Context>,
+        keysigkey_64bytes: Map<
+            // I thought to key the `Map` with (Fqdn, Ksigk), but there's [no `#[derive(Hash)]` anymore](https://discord.com/channels/1113924620781883405/1359702206873604260/1368975601767288902)
+            Field,
+            PublicMutable<bool, Context>, // is revoked
+            Context
+        >,
 
         // registry_zonesigkey: Map<Field, Zsigk>,
         // registry_dkimkey_selector: Map<Field, Map<
@@ -73,77 +72,79 @@ pub contract Main {
 
     #[public] #[initializer]
     fn initialize() {
-        let datum = (
-            BoundedVec{ storage: ["com"; 243], len: 1 },
-            [
-                183,
-                31,
-                4,
-                101,
-                16,
-                29,
-                219,
-                226,
-                191,
-                12,
-                148,
-                85,
-                209,
-                47,
-                161,
-                108,
-                28,
-                218,
-                68,
-                244,
-                191,
-                27,
-                162,
-                85,
-                52,
-                24,
-                173,
-                31,
-                58,
-                169,
-                176,
-                105,
-                115,
-                242,
-                27,
-                132,
-                235,
-                83,
-                44,
-                244,
-                3,
-                94,
-                232,
-                212,
-                131,
-                44,
-                162,
-                109,
-                137,
-                48,
-                106,
-                125,
-                50,
-                86,
-                12,
-                12,
-                176,
-                18,
-                157,
-                69,
-                10,
-                193,
-                8,
-                53,
-            ],
-            false
-        );
-        storage.registry_keysigkey.insert(context, datum.hash(), datum);
+        BoundedVec::from_array("com.".as_bytes()).pack();
+        // let datum = (
+        //     BoundedVec::from_array("com.".as_bytes()),
+        //     [
+        //         183 as u8,
+        //         31 as u8,
+        //         4 as u8,
+        //         101 as u8,
+        //         16 as u8,
+        //         29 as u8,
+        //         219 as u8,
+        //         226 as u8,
+        //         191 as u8,
+        //         12 as u8,
+        //         148 as u8,
+        //         85 as u8,
+        //         209 as u8,
+        //         47 as u8,
+        //         161 as u8,
+        //         108 as u8,
+        //         28 as u8,
+        //         218 as u8,
+        //         68 as u8,
+        //         244 as u8,
+        //         191 as u8,
+        //         27 as u8,
+        //         162 as u8,
+        //         85 as u8,
+        //         52 as u8,
+        //         24 as u8,
+        //         173 as u8,
+        //         31 as u8,
+        //         58 as u8,
+        //         169 as u8,
+        //         176 as u8,
+        //         105 as u8,
+        //         115 as u8,
+        //         242 as u8,
+        //         27 as u8,
+        //         132 as u8,
+        //         235 as u8,
+        //         83 as u8,
+        //         44 as u8,
+        //         244 as u8,
+        //         3 as u8,
+        //         94 as u8,
+        //         232 as u8,
+        //         212 as u8,
+        //         131 as u8,
+        //         44 as u8,
+        //         162 as u8,
+        //         109 as u8,
+        //         137 as u8,
+        //         48 as u8,
+        //         106 as u8,
+        //         125 as u8,
+        //         50 as u8,
+        //         86 as u8,
+        //         12 as u8,
+        //         12 as u8,
+        //         176 as u8,
+        //         18 as u8,
+        //         157 as u8,
+        //         69 as u8,
+        //         10 as u8,
+        //         193 as u8,
+        //         8 as u8,
+        //         53 as u8,
+        //     ]
+        // );
+        // storage.keysigkey_64bytes.at()(
+        //     ,
+        // )).write(false);
     }
 
     // pub fn add_zsigk_ecdsa256sha256(

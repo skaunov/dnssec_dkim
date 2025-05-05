@@ -10,21 +10,43 @@ pub contract Main {
 
     use std::meta::derive;
     use dep::aztec::macros::{storage::storage, functions::{initializer, internal, private, public, utility, view}};
-    use dep::aztec::protocol_types::traits::{FromField, ToField, Hash};
+    use dep::aztec::protocol_types::traits::{FromField, ToField, Packable}; // {Deserialize, Hash, Serialize}
     use dep::aztec::prelude::{AztecAddress, Map, PublicContext, PublicImmutable, PublicMutable};
 
     // TODO add `pub` and correct algorithm suffixes
     // type P256Key = [u8; 64];
     // // #[derive(Hash)]
     
-    type Fqdn = BoundedVec<u8, 253 - 10 - 2>; 
+    /// FQDN specified max. len. minus the _domaindkim_ specified part minus minimum selector can take
+    global FqdnMaxLen: u32 = 253 - 10 - 2;
+    type Fqdn = BoundedVec<u8, FqdnMaxLen>; 
     
-    // #[derive(Hash)]
-    // struct Len64DnsKey (
-    //     Fqdn, Ksigk
-    //     // validity_to_from: (Field, Field),
-    //     // tag: Field
-    // )
+    // #[derive(Packable)]
+    struct Len64DnsKey {
+        domain: Fqdn, 
+        key: Ksigk
+        // validity_to_from: (Field, Field),
+        // tag: Field
+    }
+    // TODO quite some space for optimization here
+    impl Packable<64 + 1 + FqdnMaxLen> for Len64DnsKey {
+        fn pack(self) -> [Field; 64 + 1 + FqdnMaxLen] {
+            let l = self.domain.len();
+            let mut r = [0; 64 + 1 + FqdnMaxLen];
+            for i in 0..l {
+                r[i] = self.domain.get(i);
+            }
+            r[FqdnMaxLen] = 
+            
+            self.key.map(|b| b as Field).concat([l as Field]).concat()
+
+            r
+        }
+        fn unpack(packed: [Field; N]) -> Self {
+            BoundedVec::from_array(packed)
+        }
+    }
+
     // // #[derive(Hash)]
     // struct DkimKeySelectorId<NUM_LABELS: Field> {
     //     selector: str, 
@@ -72,79 +94,75 @@ pub contract Main {
 
     #[public] #[initializer]
     fn initialize() {
-        BoundedVec::from_array("com.".as_bytes()).pack();
-        // let datum = (
-        //     BoundedVec::from_array("com.".as_bytes()),
-        //     [
-        //         183 as u8,
-        //         31 as u8,
-        //         4 as u8,
-        //         101 as u8,
-        //         16 as u8,
-        //         29 as u8,
-        //         219 as u8,
-        //         226 as u8,
-        //         191 as u8,
-        //         12 as u8,
-        //         148 as u8,
-        //         85 as u8,
-        //         209 as u8,
-        //         47 as u8,
-        //         161 as u8,
-        //         108 as u8,
-        //         28 as u8,
-        //         218 as u8,
-        //         68 as u8,
-        //         244 as u8,
-        //         191 as u8,
-        //         27 as u8,
-        //         162 as u8,
-        //         85 as u8,
-        //         52 as u8,
-        //         24 as u8,
-        //         173 as u8,
-        //         31 as u8,
-        //         58 as u8,
-        //         169 as u8,
-        //         176 as u8,
-        //         105 as u8,
-        //         115 as u8,
-        //         242 as u8,
-        //         27 as u8,
-        //         132 as u8,
-        //         235 as u8,
-        //         83 as u8,
-        //         44 as u8,
-        //         244 as u8,
-        //         3 as u8,
-        //         94 as u8,
-        //         232 as u8,
-        //         212 as u8,
-        //         131 as u8,
-        //         44 as u8,
-        //         162 as u8,
-        //         109 as u8,
-        //         137 as u8,
-        //         48 as u8,
-        //         106 as u8,
-        //         125 as u8,
-        //         50 as u8,
-        //         86 as u8,
-        //         12 as u8,
-        //         12 as u8,
-        //         176 as u8,
-        //         18 as u8,
-        //         157 as u8,
-        //         69 as u8,
-        //         10 as u8,
-        //         193 as u8,
-        //         8 as u8,
-        //         53 as u8,
-        //     ]
-        // );
-        // storage.keysigkey_64bytes.at()(
-        //     ,
-        // )).write(false);
+        storage.keysigkey_64bytes.at(std::hash::pedersen_hash(Len64DnsKey{
+            domain: BoundedVec::from_array("com.".as_bytes()),
+            key: [
+                183 as u8,
+                31 as u8,
+                4 as u8,
+                101 as u8,
+                16 as u8,
+                29 as u8,
+                219 as u8,
+                226 as u8,
+                191 as u8,
+                12 as u8,
+                148 as u8,
+                85 as u8,
+                209 as u8,
+                47 as u8,
+                161 as u8,
+                108 as u8,
+                28 as u8,
+                218 as u8,
+                68 as u8,
+                244 as u8,
+                191 as u8,
+                27 as u8,
+                162 as u8,
+                85 as u8,
+                52 as u8,
+                24 as u8,
+                173 as u8,
+                31 as u8,
+                58 as u8,
+                169 as u8,
+                176 as u8,
+                105 as u8,
+                115 as u8,
+                242 as u8,
+                27 as u8,
+                132 as u8,
+                235 as u8,
+                83 as u8,
+                44 as u8,
+                244 as u8,
+                3 as u8,
+                94 as u8,
+                232 as u8,
+                212 as u8,
+                131 as u8,
+                44 as u8,
+                162 as u8,
+                109 as u8,
+                137 as u8,
+                48 as u8,
+                106 as u8,
+                125 as u8,
+                50 as u8,
+                86 as u8,
+                12 as u8,
+                12 as u8,
+                176 as u8,
+                18 as u8,
+                157 as u8,
+                69 as u8,
+                10 as u8,
+                193 as u8,
+                8 as u8,
+                53 as u8,
+            ]
+        }.pack())).write(false);
     }
 
     // pub fn add_zsigk_ecdsa256sha256(

@@ -16,7 +16,11 @@ pub contract Main {
     // TODO add `pub` and correct algorithm suffixes
     // type P256Key = [u8; 64];
     // // #[derive(Hash)]
-    // type Domain<NUM_LABELS: Field> = [str, NUM_LABELS];
+    
+    // TODO optimize `BoundedVec<str<63>, 243>,`
+    global MLEN: u32 = 243;
+    // type Domain<NUM_LABELS: Field> = [str, NUM_LABELS]; 
+    
     // // #[derive(Hash)]
     // struct ZoneKeyId<NUM_LABELS: Field> {
     //     domain: Domain<NUM_LABELS>,
@@ -48,10 +52,13 @@ pub contract Main {
         // starting from `["com"]` TODO _from `[]`_
         // as DNSSEC uses different algorithms a `Map` sig-key value is a `Vec<u8>` to represent all of them
         // registry_ds: Map<DomainDigest, Ds, Context>,
-        registry_keysigkey: Map<Field, Map<Field, (
+        
+        registry_keysigkey: Map<Field, (
+            BoundedVec<str<63>, MLEN>,
             Ksigk,
             bool, // is revoked
-        ), Context>, Context>,
+        ), Context>,
+
         // registry_zonesigkey: Map<Field, Zsigk>,
         // registry_dkimkey_selector: Map<Field, Map<
         //     Field, // a DKIM-key digest
@@ -66,73 +73,77 @@ pub contract Main {
 
     #[public] #[initializer]
     fn initialize() {
-        let ksk = [
-            183,
-            31,
-            4,
-            101,
-            16,
-            29,
-            219,
-            226,
-            191,
-            12,
-            148,
-            85,
-            209,
-            47,
-            161,
-            108,
-            28,
-            218,
-            68,
-            244,
-            191,
-            27,
-            162,
-            85,
-            52,
-            24,
-            173,
-            31,
-            58,
-            169,
-            176,
-            105,
-            115,
-            242,
-            27,
-            132,
-            235,
-            83,
-            44,
-            244,
-            3,
-            94,
-            232,
-            212,
-            131,
-            44,
-            162,
-            109,
-            137,
-            48,
-            106,
-            125,
-            50,
-            86,
-            12,
-            12,
-            176,
-            18,
-            157,
-            69,
-            10,
-            193,
-            8,
-            53,
-        ]; // "com."
-        storage.registry_keysigkey.at(["com"]).insert(context, ksk.hash(), (ksk, false));
+        let datum = (
+            BoundedVec{ storage: ["com"; 243], len: 1 },
+            [
+                183,
+                31,
+                4,
+                101,
+                16,
+                29,
+                219,
+                226,
+                191,
+                12,
+                148,
+                85,
+                209,
+                47,
+                161,
+                108,
+                28,
+                218,
+                68,
+                244,
+                191,
+                27,
+                162,
+                85,
+                52,
+                24,
+                173,
+                31,
+                58,
+                169,
+                176,
+                105,
+                115,
+                242,
+                27,
+                132,
+                235,
+                83,
+                44,
+                244,
+                3,
+                94,
+                232,
+                212,
+                131,
+                44,
+                162,
+                109,
+                137,
+                48,
+                106,
+                125,
+                50,
+                86,
+                12,
+                12,
+                176,
+                18,
+                157,
+                69,
+                10,
+                193,
+                8,
+                53,
+            ],
+            false
+        );
+        storage.registry_keysigkey.insert(context, datum.hash(), datum);
     }
 
     // pub fn add_zsigk_ecdsa256sha256(

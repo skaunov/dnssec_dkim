@@ -90,7 +90,6 @@ pub contract Main {
         // TODO I'm thinking about establish a bit complex tree structure and just provide getters for the API
         // starting from `["com"]` TODO _from `[]`_
         // as DNSSEC uses different algorithms a `Map` sig-key value is a `Vec<u8>` to represent all of them
-        // registry_ds: Map<DomainDigest, Ds, Context>,
         keysigkey_64bytes: Map<
             // I thought to key the `Map` with (Fqdn, Ksigk), but there's [no `#[derive(Hash)]` anymore](https://discord.com/channels/1113924620781883405/1359702206873604260/1368975601767288902)
             // Bytes64DnsKey,
@@ -110,15 +109,15 @@ pub contract Main {
             >,
             Context
         >,
-        // registry_dkimkey_selector: Map<Field, Map<
-        //     Field, // a DKIM-key digest
-        //     (
-        //         DkimKey,
-        //         bool, // is revoked
-        //         Field, // no later
-        //         Field, // not before
-        //     )
-        // >>
+        dkimkey_rsa2048: Map<Field, Map<
+            // DkimKey,
+            Field, 
+            (
+                bool, // is revoked
+                // Field, // no later
+                // Field, // not before
+            )
+        >>
     }
 
     #[public] #[initializer]
@@ -290,7 +289,63 @@ pub contract Main {
         storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
     }
 
-    // pub fn add_dkim_ecdsa() {}
+    global dkim_zone: [u8; 10] = "_domainkey".as_bytes();
+    // TODO implement packable trait
+    struct DkimKeyRsa2048 {
+        domain: Fqdn,
+        selector: BoundedVec<u8, 63>,
+        key: [u8; 256]
+    }
+    // #calculatonEstimation
+    #[derive(Deserialize, Serialize)]
+    // pub struct DkimRecordSetBytesRsa2048 {
+    pub struct DkimArgsKeyAndRecordRsa2048 {
+        record: BoundedVec<u8, 289 * 2>,
+        parts: DkimKeyRsa2048,
+    }
+    pub fn add_dkim_rsa2048_signed_ecdsa256sha256(
+        bytes: DkimArgsKeyAndRecordRsa2048,
+        dkim_key_position: u32,
+        rrsig: [u8; 64],
+        zsigk_x: [u8; 32],
+        zsigk_y: [u8; 32],
+    ) {
+        assert(storage.keysigkey_64bytes.at(pedersen_hash(
+            child_ksigk
+            Bytes64DnsKey{domain: _, key_x: zsigk_x, key_y: zsigk_y}
+            .pack()
+        )).read());
+        
+        let mut record = bytes.record;
+        let l_selector = bytes.parts.selector.len();
+        let index_dot = l_selector + 1;
+        let index_domain_start = index_dot + 10;
+        for i in 0..l_selector {
+            record.set_unchecked(i, bytes.parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch previous
+        }
+        record.set_unchecked(index_dot, ".".as_bytes()[0]); 
+        for i in (index_dot)..index_domain_start {
+            record.set_unchecked(i, dkim_zone); 
+        }
+        for i in index_domain_start..(bytes.parts.domain.len() + index_domain_start) {
+            record.set_unchecked(i, bytes.parts.domain.get_unchecked(i)); 
+        }
+        // TODO **a key concatenation!!!!!!!!!!!!!**
+        for i in dkim_key_position..(dkim_key_position + 256) {
+            record.set_unchecked(i, bytes.parts.key.get_unchecked(i)); 
+        }
+
+        assert(std::ecdsa_secp256r1::verify_signature(
+            zsigk_x, zsigk__y,
+            rrsig, dep::sha256::sha256_var(
+                record.storage(), record..len() as u64
+            )
+        ));
+
+        storage.dkimkey_rsa2048.at(pedersen_hash(bytes.parts.pack())).write(true);
+    }
+
+    // AFAIK DKIM has no revokation mechanism so it can be done by revealing the private key to the contract publicly. Sadly privately won't make this as that would allow the key owner to mark it revoked for this contract only.
 }
 
 #[test]

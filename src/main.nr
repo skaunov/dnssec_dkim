@@ -11,7 +11,7 @@ pub contract Main {
     use std::meta::derive;
     use std::hash::pedersen_hash;
     use dep::aztec::macros::{storage::storage, functions::{initializer, internal, private, public, utility, view}};
-    use dep::aztec::protocol_types::traits::{FromField, ToField, Packable}; // {Deserialize, Hash, Serialize}
+    use dep::aztec::protocol_types::traits::{FromField, ToField, Packable, Deserialize, Serialize}; // , Hash
     use dep::aztec::prelude::{AztecAddress, Map, PublicContext, PublicImmutable, PublicMutable};
 
     // TODO add `pub` and correct algorithm suffixes
@@ -22,8 +22,8 @@ pub contract Main {
     global FqdnMaxLen: u32 = 253 - 10 - 2;
     type Fqdn = BoundedVec<u8, FqdnMaxLen>; 
     
-    // #[derive(Packable)]
-    struct Bytes64DnsKey {
+    #[derive(Deserialize, Serialize)]
+    pub struct Bytes64DnsKey {
         domain: Fqdn, 
         key: [u8; 64]
         // validity_to_from: (Field, Field),
@@ -190,10 +190,11 @@ pub contract Main {
         );
     }
 
-    struct DnskeyRecord {
-        domain: Fqdn,
-        
-    }
+    // estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype
+    // a big reserved space, [a recommended maximum is 13 but some systems allow much higher (which open those for an attack)](https://datatracker.ietf.org/meeting/121/materials/slides-121-dnsop-sessb-dns-upper-limit-values-00)
+    
+    #[derive(Deserialize, Serialize)]
+    struct DnskeyRecordSetBytes = {bytes: BoundedVec<u8, 16 * 333>};
     
     #[public]
     fn add_zsigk_ecdsa256sha256(
@@ -204,7 +205,7 @@ pub contract Main {
 
         ksigk_rrset_position: u32,
         // delegationsigner: _,
-        rrset_dnskey: Vec<u8>,
+        rrset_dnskey: DnskeyRecordSetBytes, 
         rrsig_dnskey: [u8; 64],
         zsigk: [u8; 64],
         zsigk_rrset_position: u32,
@@ -212,12 +213,21 @@ pub contract Main {
     ) {
         assert(!storage.keysigkey_64bytes.at(pedersen_hash(ksigk)), "add the _key signing key_ first");
 
+        // let mut (x, y) = ([0; 64], [0; 64]);
         for i in 0..63 {
-            rrset_dnskey[ksigk_rrset_position + i] = ksigk.key[i];
-            rrset_dnskey[zsigk_rrset_position + i] = zsigk[i];
+            rrset_dnskey.bytes[ksigk_rrset_position + i] = ksigk.key[i];
+            rrset_dnskey.bytes[zsigk_rrset_position + i] = zsigk[i];
+            // x[i] = ksigk.key[i];
+            // y[i] = ksigk.key[i + 31];
         }
 
-        assert(std::ecdsa_secp256r1::verify_signature(ksigk.key[0..31], ksigk.key[31..63], rrsig_dnskey, dep::sha256::sha256_var(rrset_dnskey, rrset_dnskey.len())));
+        assert(std::ecdsa_secp256r1::verify_signature(
+            ksigk.key[0..32], ksigk.key[32..64], 
+            // x, y,
+            rrsig_dnskey, dep::sha256::sha256_var(
+                rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len()
+            )
+        ));
     }
 
     // pub fn add_ds_ecdsa(

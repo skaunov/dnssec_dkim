@@ -27,7 +27,7 @@ pub contract Main {
     #[derive(Deserialize, Serialize)]
     pub struct Bytes64DnsKey {
         domain: Fqdn, 
-        key_x: [u8; 32]
+        key_x: [u8; 32],
         key_y: [u8; 32]
         // validity_to_from: (Field, Field),
         // tag: Field
@@ -125,7 +125,7 @@ pub contract Main {
     fn initialize() {
         let the = Bytes64DnsKey{
             domain: BoundedVec::from_array("com.".as_bytes()),
-            key: [
+            key_x: [
                 183 as u8,
                 31 as u8,
                 4 as u8,
@@ -157,7 +157,9 @@ pub contract Main {
                 58 as u8,
                 169 as u8,
                 176 as u8,
-                105 as u8,
+                105 as u8
+            ],
+            key_y: [ 
                 115 as u8,
                 242 as u8,
                 27 as u8,
@@ -200,61 +202,92 @@ pub contract Main {
         );
     }
 
-    // estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype
+    // estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype #calculatonEstimation
     // a big reserved space, [a recommended maximum is 13 but some systems allow much higher (which open those for an attack)](https://datatracker.ietf.org/meeting/121/materials/slides-121-dnsop-sessb-dns-upper-limit-values-00)
     #[derive(Deserialize, Serialize)]
     pub struct DnskeyRecordSetBytes {bytes: BoundedVec<u8, 16 * 333>}
     
     #[public]
     fn add_zsigk_len64_signed_ecdsa256sha256(
-        ksigk: ([u8; 32], [u8; 32]),
-        domain: Fqdn,
+        // ksigk_x: [u8; 32],
+        // ksigk_y: [u8; 32],
+        // domain: Fqdn,
+        ksigk: Bytes64DnsKey,
+        domain_rrset_position: u32,
         ksigk_rrset_position: u32,
         // delegationsigner: _,
         rrset_dnskey: DnskeyRecordSetBytes, 
         rrsig_dnskey: [u8; 64],
-        zsigk: ([u8; 32], [u8; 32]),
+        zsigk_x: [u8; 32],
+        zsigk_y: [u8; 32],
         zsigk_rrset_position: u32,
-        // time and tag shouldn't go here -- deal with it downstream in a contract
     ) {
-        assert(storage.keysigkey_64bytes.at(
-            pedersen_hash(
-                Bytes64DnsKey{domain, key_x: ksigk.0, key_y: ksigk.1}
-                .pack()
-            )
-        ).read(), "the key have been revoked or never added"); 
+        assert(storage.keysigkey_64bytes.at(pedersen_hash(ksigk.pack())).read(), "the key have been revoked or never added"); 
 
         let mut rrset_dnskey = rrset_dnskey;
+        for i in 0..ksigk.domain.len() {
+            rrset_dnskey.bytes.set_unchecked(domain_rrset_position + i, ksigk.domain.get(i));
+        }
         for i in 0..32 {
-            rrset_dnskey.bytes.set_unchecked(ksigk_rrset_position + i, ksigk.0[i]);
-            rrset_dnskey.bytes.set_unchecked(ksigk_rrset_position + i + 32, ksigk.1[i]);
-            rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i, zsigk.0[i]);
-            rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i + 32, zsigk.1[i]);
+            rrset_dnskey.bytes.set_unchecked(ksigk_rrset_position + i, ksigk.key_x[i]);
+            rrset_dnskey.bytes.set_unchecked(ksigk_rrset_position + i + 32, ksigk.key_y[i]);
+            rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i, zsigk_x[i]);
+            rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i + 32, zsigk_y[i]);
         }
 
         assert(std::ecdsa_secp256r1::verify_signature(
             // ksigk.key[0..32], ksigk.key[32..64], 
-            ksigk.0, ksigk.1,
+            ksigk.key_x, ksigk.key_y,
             rrsig_dnskey, dep::sha256::sha256_var(
                 rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len() as u64
             )
         ));
 
-        storage.zonesigkey_64bytes.at(Bytes64DnsKey{domain, key_x: zsigk.0, key_y: zsigk.1}).write(true);
+        storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y}.pack())).write(true);
     }
 
+    // #calculatonEstimation
+    #[derive(Deserialize, Serialize)]
+    pub struct DsRecordSetBytes {bytes: BoundedVec<u8, 289 * 2>} // ~~feels like it makes no sense to design for more than one record in a set here~~ #singleDS
+    
     #[public]
     fn add_ds_ecdsa(
-        parent_zsigk: Field,
-        ds_rrset: Vec<u8>,
-        child_ksigk: ([u8; 32], [u8; 32]),
-        ksigk_rrset_position: u32
+        parent_zsigk: Bytes64DnsKey,
+        rrset_ds: DsRecordSetBytes,
+        child_ksigk: Bytes64DnsKey,
+        // ~~with #singleDS it's possible to say that the child domain position is `0`~~
+        child_domain_position: u32,
+        ksigk_rrset_position: u32,
+        rrsig_ds: [u8; 64],
     ) {
-        assert(parent_zsigk = storage.zonesigkey_64bytes.at(Bytes64DnsKey{domain: ksigk.domain, key: zsigk}).read(), "the key have been revoked or never added"); 
+        assert(storage.zonesigkey_64bytes.at(pedersen_hash(parent_zsigk.pack())).read(), "the key have been revoked or never added"); 
 
-        // DS contains the child domain
-        // DS contains the child KSK
-        // RRSIG matches ZSK
+        let l_child = child_ksigk.domain.len();
+        let l_parent = parent_zsigk.domain.len();
+        // assert(".".as_bytes()[0] == child_ksigk.domain.get(l_child - l_parent), "DS must define a subdomain");
+        let mut rrset_ds = rrset_ds;
+        for i in 0..(l_child - l_parent) {
+            rrset_ds.bytes.set_unchecked(i + child_domain_position, child_ksigk.domain.get(i));
+        }
+        for i in 0..l_parent {
+            // assert(parent_zsigk.domain.get(i) == child_ksigk.domain.get(i + l_child - l_parent), "DS must define a subdomain");
+            rrset_ds.bytes.set_unchecked(
+                i + child_domain_position + l_child, parent_zsigk.domain.get(i)
+            );
+        }
+        for i in 0..32 {
+            rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i, child_ksigk.key_x[i]);
+            rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i + 32, child_ksigk.key_y[i]);
+        }
+
+        assert(std::ecdsa_secp256r1::verify_signature(
+            parent_zsigk.key_x, parent_zsigk.key_y,
+            rrsig_ds, dep::sha256::sha256_var(
+                rrset_ds.bytes.storage(), rrset_ds.bytes.len() as u64
+            )
+        ));
+
+        storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
     }
 
     // pub fn add_dkim_ecdsa() {}

@@ -10,7 +10,9 @@ pub contract Main {
 
     use std::meta::derive;
     use std::hash::pedersen_hash;
-    use dep::aztec::macros::{storage::storage, functions::{initializer, internal, private, public, utility, view}};
+    use dep::aztec::macros::{
+        storage::storage, functions::{initializer, internal, private, public, utility, view}
+    };
     use dep::aztec::protocol_types::traits::{FromField, ToField, Packable, Deserialize, Serialize}; // , Hash
     use dep::aztec::prelude::{AztecAddress, Map, PublicContext, PublicImmutable, PublicMutable};
 
@@ -25,7 +27,8 @@ pub contract Main {
     #[derive(Deserialize, Serialize)]
     pub struct Bytes64DnsKey {
         domain: Fqdn, 
-        key: [u8; 64]
+        key_x: [u8; 32]
+        key_y: [u8; 32]
         // validity_to_from: (Field, Field),
         // tag: Field
     }
@@ -43,20 +46,23 @@ pub contract Main {
             }
             r[FqdnMaxLen] = l as Field;
             
-            r.concat(self.key.map(|b| b as Field))
+            r.concat(self.key_x.map(|b| b as Field)).concat(self.key_y.map(|b| b as Field))
         }
         fn unpack(packed: [Field; LenPacked64DnsKey]) -> Self {
             let mut d: [u8; FqdnMaxLen] = [0; FqdnMaxLen];
-            let mut key: Ksigk = [0; 64];
+            let mut (key_x, key_y): ([u8; 32], [u8; 32]) = ([0; 32], [0; 32]);
             for i in 0..FqdnMaxLen {d[i] = packed[i] as u8;}
-            for i in 0..64 {key[i] = packed[i + FqdnMaxLen + 1] as u8;}
+            for i in 0..32 {
+                key_x[i] = packed[i + FqdnMaxLen + 1] as u8;
+                key_y[i] = packed[i + FqdnMaxLen + 1 + 32] as u8;
+            }
             Bytes64DnsKey{
                 domain: BoundedVec::from_parts_unchecked(
                     // &packed[0..FqdnMaxLen].map(|e| e as u8).as_array(), 
                     d, packed[FqdnMaxLen] as u32
                 ),//.map(|e| e as u8), 
                 // key: &packed[(FqdnMaxLen + 1)..].map(|e| e as u8).as_array()
-                key
+                key_x, key_y
             }
         }
     }
@@ -85,21 +91,25 @@ pub contract Main {
         // starting from `["com"]` TODO _from `[]`_
         // as DNSSEC uses different algorithms a `Map` sig-key value is a `Vec<u8>` to represent all of them
         // registry_ds: Map<DomainDigest, Ds, Context>,
-        
         keysigkey_64bytes: Map<
             // I thought to key the `Map` with (Fqdn, Ksigk), but there's [no `#[derive(Hash)]` anymore](https://discord.com/channels/1113924620781883405/1359702206873604260/1368975601767288902)
+            // Bytes64DnsKey,
             Field,
             PublicMutable<
-                // (
-                //     Bytes64DnsKey,
-                    bool, // is revoked
-                // ), 
+                bool, // is *not* revoked
                 Context
             >,
             Context
         >,
-
-        // registry_zonesigkey: Map<Field, Zsigk>,
+        zonesigkey_64bytes: Map<
+            // Bytes64DnsKey,
+            Field,
+            PublicMutable<
+                bool, // is *not* revoked
+                Context
+            >,
+            Context
+        >,
         // registry_dkimkey_selector: Map<Field, Map<
         //     Field, // a DKIM-key digest
         //     (
@@ -185,58 +195,67 @@ pub contract Main {
         storage.keysigkey_64bytes.at(pedersen_hash(the)).write(
             // (
             //     the, 
-                false
+                true
             // )
         );
     }
 
     // estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype
     // a big reserved space, [a recommended maximum is 13 but some systems allow much higher (which open those for an attack)](https://datatracker.ietf.org/meeting/121/materials/slides-121-dnsop-sessb-dns-upper-limit-values-00)
-    
     #[derive(Deserialize, Serialize)]
-    struct DnskeyRecordSetBytes = {bytes: BoundedVec<u8, 16 * 333>};
+    pub struct DnskeyRecordSetBytes {bytes: BoundedVec<u8, 16 * 333>}
     
     #[public]
-    fn add_zsigk_ecdsa256sha256(
-        /// take this from a verified source
-        ksigk: Bytes64DnsKey,
-
-        // other args will be checked
-
+    fn add_zsigk_len64_signed_ecdsa256sha256(
+        ksigk: ([u8; 32], [u8; 32]),
+        domain: Fqdn,
         ksigk_rrset_position: u32,
         // delegationsigner: _,
         rrset_dnskey: DnskeyRecordSetBytes, 
         rrsig_dnskey: [u8; 64],
-        zsigk: [u8; 64],
+        zsigk: ([u8; 32], [u8; 32]),
         zsigk_rrset_position: u32,
         // time and tag shouldn't go here -- deal with it downstream in a contract
     ) {
-        assert(!storage.keysigkey_64bytes.at(pedersen_hash(ksigk)), "add the _key signing key_ first");
+        assert(storage.keysigkey_64bytes.at(
+            pedersen_hash(
+                Bytes64DnsKey{domain, key_x: ksigk.0, key_y: ksigk.1}
+                .pack()
+            )
+        ).read(), "the key have been revoked or never added"); 
 
-        // let mut (x, y) = ([0; 64], [0; 64]);
-        for i in 0..63 {
-            rrset_dnskey.bytes[ksigk_rrset_position + i] = ksigk.key[i];
-            rrset_dnskey.bytes[zsigk_rrset_position + i] = zsigk[i];
-            // x[i] = ksigk.key[i];
-            // y[i] = ksigk.key[i + 31];
+        let mut rrset_dnskey = rrset_dnskey;
+        for i in 0..32 {
+            rrset_dnskey.bytes.set_unchecked(ksigk_rrset_position + i, ksigk.0[i]);
+            rrset_dnskey.bytes.set_unchecked(ksigk_rrset_position + i + 32, ksigk.1[i]);
+            rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i, zsigk.0[i]);
+            rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i + 32, zsigk.1[i]);
         }
 
         assert(std::ecdsa_secp256r1::verify_signature(
-            ksigk.key[0..32], ksigk.key[32..64], 
-            // x, y,
+            // ksigk.key[0..32], ksigk.key[32..64], 
+            ksigk.0, ksigk.1,
             rrsig_dnskey, dep::sha256::sha256_var(
-                rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len()
+                rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len() as u64
             )
         ));
+
+        storage.zonesigkey_64bytes.at(Bytes64DnsKey{domain, key_x: zsigk.0, key_y: zsigk.1}).write(true);
     }
 
-    // pub fn add_ds_ecdsa(
-    //     /// take this from a verified source
-    //     parent_zsigk: ([u8; 32], [u8; 32]),
-        
-    //     ds_rrset: Vec<u8>,
-    //     child_ksigk: ([u8; 32], [u8; 32]),
-    // ) {}
+    #[public]
+    fn add_ds_ecdsa(
+        parent_zsigk: Field,
+        ds_rrset: Vec<u8>,
+        child_ksigk: ([u8; 32], [u8; 32]),
+        ksigk_rrset_position: u32
+    ) {
+        assert(parent_zsigk = storage.zonesigkey_64bytes.at(Bytes64DnsKey{domain: ksigk.domain, key: zsigk}).read(), "the key have been revoked or never added"); 
+
+        // DS contains the child domain
+        // DS contains the child KSK
+        // RRSIG matches ZSK
+    }
 
     // pub fn add_dkim_ecdsa() {}
 }

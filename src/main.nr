@@ -109,15 +109,19 @@ pub contract Main {
             >,
             Context
         >,
-        dkimkey_rsa2048: Map<Field, Map<
+        dkimkey_rsa2048: Map<
             // DkimKey,
             Field, 
-            (
-                bool, // is revoked
-                // Field, // no later
-                // Field, // not before
-            )
-        >>
+            PublicMutable<
+                // (
+                    bool, // is *not* revoked
+                    // Field, // no later
+                    // Field, // not before
+                // )
+                Context
+            >,
+            Context
+        >
     }
 
     #[public] #[initializer]
@@ -242,7 +246,9 @@ pub contract Main {
             )
         ));
 
-        storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y}.pack())).write(true);
+        storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{
+            domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y
+        }.pack())).write(true);
     }
 
     // #calculatonEstimation
@@ -289,61 +295,104 @@ pub contract Main {
         storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
     }
 
-    global dkim_zone: [u8; 10] = "_domainkey".as_bytes();
+    global dkim_label: [u8; 10] = "_domainkey".as_bytes();
+    global dot_byte: u8 = ".".as_bytes()[0];
     // TODO implement packable trait
     struct DkimKeyRsa2048 {
         domain: Fqdn,
         selector: BoundedVec<u8, 63>,
         key: [u8; 256]
     }
+    global LenPackedDkimKeyRsa2048: u32 = 256 + 1 + FqdnMaxLen + 1 + 63;
+    impl Packable<LenPackedDkimKeyRsa2048> for DkimKeyRsa2048 {
+        fn pack(self) -> [Field; LenPackedDkimKeyRsa2048] {
+            let l_domain = self.domain.len();
+            let l_selector = self.selector.len();
+            let mut r_domain = [0; FqdnMaxLen + 1];
+            for i in 0..l_domain {
+                r_domain[i] = self.domain.get(i) as Field;
+            }
+            r_domain[FqdnMaxLen] = l_domain as Field;
+            let mut r_selector = [0; 63 + 1];
+            for i in 0..l_selector {
+                r_selector[i] = self.selector.get(i) as Field;
+            }
+            r_selector[63] = l_selector as Field;
+            
+            r_domain.concat(r_selector).concat(self.key.map(|b| b as Field))
+        }
+        fn unpack(packed: [Field; LenPackedDkimKeyRsa2048]) -> Self {
+            let mut d: [u8; FqdnMaxLen] = [0; FqdnMaxLen];
+            let mut s: [u8; 63] = [0; 63];
+            let mut key: [u8; 256] = [0; 256];
+            for i in 0..FqdnMaxLen {d[i] = packed[i] as u8;}
+            for i in 0..63 {s[i] = packed[i + FqdnMaxLen + 1] as u8;}
+            for i in 0..256 {
+                key[i] = packed[i + FqdnMaxLen + 1 + 63 + 1] as u8;
+            }
+            DkimKeyRsa2048{
+                domain: BoundedVec::from_parts_unchecked(d, packed[FqdnMaxLen] as u32),
+                selector: BoundedVec::from_parts_unchecked(s, packed[FqdnMaxLen + 1 + 63] as u32),
+                key
+            }
+        }
+    }
     // #calculatonEstimation
     #[derive(Deserialize, Serialize)]
     // pub struct DkimRecordSetBytesRsa2048 {
     pub struct DkimArgsKeyAndRecordRsa2048 {
-        record: BoundedVec<u8, 289 * 2>,
+        record: BoundedVec<u8, 263 + FqdnMaxLen>,
         parts: DkimKeyRsa2048,
     }
-    pub fn add_dkim_rsa2048_signed_ecdsa256sha256(
+    #[public]
+    fn add_dkim_rsa2048_self_signed_ecdsa256sha256(
         bytes: DkimArgsKeyAndRecordRsa2048,
         dkim_key_position: u32,
         rrsig: [u8; 64],
         zsigk_x: [u8; 32],
         zsigk_y: [u8; 32],
     ) {
-        assert(storage.keysigkey_64bytes.at(pedersen_hash(
-            child_ksigk
-            Bytes64DnsKey{domain: _, key_x: zsigk_x, key_y: zsigk_y}
+        assert(storage.zonesigkey_64bytes.at(pedersen_hash(
+            Bytes64DnsKey{domain: bytes.parts.domain, key_x: zsigk_x, key_y: zsigk_y}
             .pack()
         )).read());
         
         let mut record = bytes.record;
         let l_selector = bytes.parts.selector.len();
-        let index_dot = l_selector + 1;
-        let index_domain_start = index_dot + 10;
+        // let index_dot_first = l_selector;
+        // let index_dkim_label = index_dot_first + 1;
+        // let index_dot_second = index_dot_first + 1 + 10;
+        // let index_domain_start = index_dot_second + 1;
         for i in 0..l_selector {
-            record.set_unchecked(i, bytes.parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch previous
+            record.set_unchecked(i, bytes.parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
         }
-        record.set_unchecked(index_dot, ".".as_bytes()[0]); 
-        for i in (index_dot)..index_domain_start {
-            record.set_unchecked(i, dkim_zone); 
+        record.set_unchecked(l_selector, dot_byte); 
+        // for i in ()..index_dot_second {
+        for i in 0..10 {
+            record.set_unchecked(i + l_selector + 1, dkim_label[i]); 
         }
-        for i in index_domain_start..(bytes.parts.domain.len() + index_domain_start) {
-            record.set_unchecked(i, bytes.parts.domain.get_unchecked(i)); 
+        record.set_unchecked(l_selector + 1 + 10, dot_byte); 
+        // for i in ..( + index_domain_start) {
+        for i in 0..bytes.parts.domain.len() {
+            record.set_unchecked(i + l_selector + 1 + 10 + 1, bytes.parts.domain.get(i)); 
         }
-        // TODO **a key concatenation!!!!!!!!!!!!!**
-        for i in dkim_key_position..(dkim_key_position + 256) {
-            record.set_unchecked(i, bytes.parts.key.get_unchecked(i)); 
+        for i in 0..256 {
+            record.set_unchecked(i + dkim_key_position, bytes.parts.key[i]); 
         }
 
         assert(std::ecdsa_secp256r1::verify_signature(
-            zsigk_x, zsigk__y,
+            zsigk_x, zsigk_y,
             rrsig, dep::sha256::sha256_var(
-                record.storage(), record..len() as u64
+                record.storage(), record.len() as u64
             )
         ));
 
         storage.dkimkey_rsa2048.at(pedersen_hash(bytes.parts.pack())).write(true);
     }
+    
+    // TODO a lib function since adding a DKIM key which needs an additional trust assumption isn't acceptable; but quite verifiable as an addition
+    // should only be used if the caller trusts the delegated domain
+    // fn add_dkim_rsa2048_delegated_signed_ecdsa256sha256() {}
 
     // AFAIK DKIM has no revokation mechanism so it can be done by revealing the private key to the contract publicly. Sadly privately won't make this as that would allow the key owner to mark it revoked for this contract only.
 }

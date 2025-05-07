@@ -297,8 +297,8 @@ pub contract Main {
 
     global dkim_label: [u8; 10] = "_domainkey".as_bytes();
     global dot_byte: u8 = ".".as_bytes()[0];
-    // TODO implement packable trait
-    struct DkimKeyRsa2048 {
+    #[derive(Deserialize, Serialize)]
+    pub struct DkimKeyRsa2048 {
         domain: Fqdn,
         selector: BoundedVec<u8, 63>,
         key: [u8; 256]
@@ -339,32 +339,31 @@ pub contract Main {
     }
     // #calculatonEstimation
     #[derive(Deserialize, Serialize)]
-    // pub struct DkimRecordSetBytesRsa2048 {
-    pub struct DkimArgsKeyAndRecordRsa2048 {
-        record: BoundedVec<u8, 263 + FqdnMaxLen>,
-        parts: DkimKeyRsa2048,
+    pub struct DkimRecordRsa2048 {
+        bytes: BoundedVec<u8, 263 + FqdnMaxLen>,
     }
     #[public]
-    fn add_dkim_rsa2048_self_signed_ecdsa256sha256(
-        bytes: DkimArgsKeyAndRecordRsa2048,
+    fn add_dkim_rsa2048_signed_ecdsa256sha256(
+        parts: DkimKeyRsa2048,
+        record: DkimRecordRsa2048,
         dkim_key_position: u32,
         rrsig: [u8; 64],
         zsigk_x: [u8; 32],
         zsigk_y: [u8; 32],
     ) {
         assert(storage.zonesigkey_64bytes.at(pedersen_hash(
-            Bytes64DnsKey{domain: bytes.parts.domain, key_x: zsigk_x, key_y: zsigk_y}
+            Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}
             .pack()
         )).read());
         
-        let mut record = bytes.record;
-        let l_selector = bytes.parts.selector.len();
+        let mut record = record.bytes;
+        let l_selector = parts.selector.len();
         // let index_dot_first = l_selector;
         // let index_dkim_label = index_dot_first + 1;
         // let index_dot_second = index_dot_first + 1 + 10;
         // let index_domain_start = index_dot_second + 1;
         for i in 0..l_selector {
-            record.set_unchecked(i, bytes.parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
+            record.set_unchecked(i, parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
         }
         record.set_unchecked(l_selector, dot_byte); 
         // for i in ()..index_dot_second {
@@ -373,11 +372,11 @@ pub contract Main {
         }
         record.set_unchecked(l_selector + 1 + 10, dot_byte); 
         // for i in ..( + index_domain_start) {
-        for i in 0..bytes.parts.domain.len() {
-            record.set_unchecked(i + l_selector + 1 + 10 + 1, bytes.parts.domain.get(i)); 
+        for i in 0..parts.domain.len() {
+            record.set_unchecked(i + l_selector + 1 + 10 + 1, parts.domain.get(i)); 
         }
         for i in 0..256 {
-            record.set_unchecked(i + dkim_key_position, bytes.parts.key[i]); 
+            record.set_unchecked(i + dkim_key_position, parts.key[i]); 
         }
 
         assert(std::ecdsa_secp256r1::verify_signature(
@@ -387,8 +386,11 @@ pub contract Main {
             )
         ));
 
-        storage.dkimkey_rsa2048.at(pedersen_hash(bytes.parts.pack())).write(true);
+        storage.dkimkey_rsa2048.at(pedersen_hash(parts.pack())).write(true);
     }
+
+    #[public]
+    fn check_rsa2048(the: DkimKeyRsa2048) {assert(storage.dkimkey_rsa2048.at(pedersen_hash(the.pack())).read());}
     
     // TODO a lib function since adding a DKIM key which needs an additional trust assumption isn't acceptable; but quite verifiable as an addition
     // should only be used if the caller trusts the delegated domain

@@ -11,10 +11,10 @@ pub contract Main {
     use std::meta::derive;
     use std::hash::pedersen_hash;
     use dep::aztec::macros::{
-        storage::storage, functions::{initializer, internal, private, public, utility, view}
+        storage::storage, functions::{initializer, public, } // internal, private, utility, view
     };
-    use dep::aztec::protocol_types::traits::{FromField, ToField, Packable, Deserialize, Serialize}; // , Hash
-    use dep::aztec::prelude::{AztecAddress, Map, PublicContext, PublicImmutable, PublicMutable};
+    use dep::aztec::protocol_types::traits::{Packable, Deserialize, Serialize}; // , Hash, FromField, ToField, 
+    use dep::aztec::prelude::{Map, PublicMutable}; // PublicContext, PublicImmutable, 
 
     // TODO add `pub` and correct algorithm suffixes
     // type P256Key = [u8; 64];
@@ -208,7 +208,9 @@ pub contract Main {
     // estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype #calculatonEstimation
     // a big reserved space, [a recommended maximum is 13 but some systems allow much higher (which open those for an attack)](https://datatracker.ietf.org/meeting/121/materials/slides-121-dnsop-sessb-dns-upper-limit-values-00)
     #[derive(Deserialize, Serialize)]
-    pub struct DnskeyRecordSetBytes {bytes: BoundedVec<u8, 16 * 333>}
+    pub struct DnskeyRecordSetBytes {bytes: BoundedVec<
+        u8, 333 // * 4 // * 8 // * 16 // TODO actually this already covers most of the setups, but there's some ways to combine a big `RRset` from parts with enough development invested in this
+    >}
     
     #[public]
     fn add_zsigk_len64_signed_ecdsa256sha256(
@@ -238,159 +240,164 @@ pub contract Main {
             rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i + 32, zsigk_y[i]);
         }
 
+        let h: [u8; 32] = dep::sha256::sha256_var(
+                rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len() as u64
+            );
         assert(std::ecdsa_secp256r1::verify_signature(
             // ksigk.key[0..32], ksigk.key[32..64], 
             ksigk.key_x, ksigk.key_y,
-            rrsig_dnskey, dep::sha256::sha256_var(
-                rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len() as u64
-            )
+            rrsig_dnskey, h
         ));
 
-        storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{
-            domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y
-        }.pack())).write(true);
+        // storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{
+        //     domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y
+        // }.pack())).write(true);
     }
 
-    // #calculatonEstimation
-    #[derive(Deserialize, Serialize)]
-    pub struct DsRecordSetBytes {bytes: BoundedVec<u8, 289 * 2>} // ~~feels like it makes no sense to design for more than one record in a set here~~ #singleDS
+    // // #calculatonEstimation
+    // #[derive(Deserialize, Serialize)]
+    // pub struct DsRecordSetBytes {bytes: BoundedVec<u8, 289 * 2>} // ~~feels like it makes no sense to design for more than one record in a set here~~ #singleDS
     
-    #[public]
-    fn add_ds_ecdsa(
-        parent_zsigk: Bytes64DnsKey,
-        rrset_ds: DsRecordSetBytes,
-        child_ksigk: Bytes64DnsKey,
-        // ~~with #singleDS it's possible to say that the child domain position is `0`~~
-        child_domain_position: u32,
-        ksigk_rrset_position: u32,
-        rrsig_ds: [u8; 64],
-    ) {
-        assert(storage.zonesigkey_64bytes.at(pedersen_hash(parent_zsigk.pack())).read(), "the key have been revoked or never added"); 
+    // #[public]
+    // fn add_ds_ecdsa(
+    //     parent_zsigk: Bytes64DnsKey,
+    //     rrset_ds: DsRecordSetBytes,
+    //     child_ksigk: Bytes64DnsKey,
+    //     // ~~with #singleDS it's possible to say that the child domain position is `0`~~
+    //     child_domain_position: u32,
+    //     ksigk_rrset_position: u32,
+    //     rrsig_ds: [u8; 64],
+    // ) {
+    //     assert(storage.zonesigkey_64bytes.at(pedersen_hash(parent_zsigk.pack())).read(), "the key have been revoked or never added"); 
 
-        let l_child = child_ksigk.domain.len();
-        let l_parent = parent_zsigk.domain.len();
-        // assert(".".as_bytes()[0] == child_ksigk.domain.get(l_child - l_parent), "DS must define a subdomain");
-        let mut rrset_ds = rrset_ds;
-        for i in 0..(l_child - l_parent) {
-            rrset_ds.bytes.set_unchecked(i + child_domain_position, child_ksigk.domain.get(i));
-        }
-        for i in 0..l_parent {
-            // assert(parent_zsigk.domain.get(i) == child_ksigk.domain.get(i + l_child - l_parent), "DS must define a subdomain");
-            rrset_ds.bytes.set_unchecked(
-                i + child_domain_position + l_child, parent_zsigk.domain.get(i)
-            );
-        }
-        for i in 0..32 {
-            rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i, child_ksigk.key_x[i]);
-            rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i + 32, child_ksigk.key_y[i]);
-        }
+    //     let l_child = child_ksigk.domain.len();
+    //     let l_parent = parent_zsigk.domain.len();
+    //     // assert(".".as_bytes()[0] == child_ksigk.domain.get(l_child - l_parent), "DS must define a subdomain");
+    //     let mut rrset_ds = rrset_ds;
+    //     for i in 0..(l_child - l_parent) {
+    //         rrset_ds.bytes.set_unchecked(i + child_domain_position, child_ksigk.domain.get(i));
+    //     }
+    //     for i in 0..l_parent {
+    //         // assert(parent_zsigk.domain.get(i) == child_ksigk.domain.get(i + l_child - l_parent), "DS must define a subdomain");
+    //         rrset_ds.bytes.set_unchecked(
+    //             i + child_domain_position + l_child, parent_zsigk.domain.get(i)
+    //         );
+    //     }
+    //     for i in 0..32 {
+    //         rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i, child_ksigk.key_x[i]);
+    //         rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i + 32, child_ksigk.key_y[i]);
+    //     }
 
-        assert(std::ecdsa_secp256r1::verify_signature(
-            parent_zsigk.key_x, parent_zsigk.key_y,
-            rrsig_ds, dep::sha256::sha256_var(
-                rrset_ds.bytes.storage(), rrset_ds.bytes.len() as u64
-            )
-        ));
+    //     let sig_check = std::ecdsa_secp256r1::verify_signature(
+    //         parent_zsigk.key_x, parent_zsigk.key_y,
+    //         rrsig_ds, dep::sha256::sha256_var(
+    //             rrset_ds.bytes.storage(), rrset_ds.bytes.len() as u64
+    //         )
+    //     );
+    //     assert(sig_check);
 
-        storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
-    }
+    //     storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
+    // }
 
-    global dkim_label: [u8; 10] = "_domainkey".as_bytes();
-    global dot_byte: u8 = ".".as_bytes()[0];
-    #[derive(Deserialize, Serialize)]
-    pub struct DkimKeyRsa2048 {
-        domain: Fqdn,
-        selector: BoundedVec<u8, 63>,
-        key: [u8; 256]
-    }
-    global LenPackedDkimKeyRsa2048: u32 = 256 + 1 + FqdnMaxLen + 1 + 63;
-    impl Packable<LenPackedDkimKeyRsa2048> for DkimKeyRsa2048 {
-        fn pack(self) -> [Field; LenPackedDkimKeyRsa2048] {
-            let l_domain = self.domain.len();
-            let l_selector = self.selector.len();
-            let mut r_domain = [0; FqdnMaxLen + 1];
-            for i in 0..l_domain {
-                r_domain[i] = self.domain.get(i) as Field;
-            }
-            r_domain[FqdnMaxLen] = l_domain as Field;
-            let mut r_selector = [0; 63 + 1];
-            for i in 0..l_selector {
-                r_selector[i] = self.selector.get(i) as Field;
-            }
-            r_selector[63] = l_selector as Field;
+    // global dkim_label: [u8; 10] = "_domainkey".as_bytes();
+    // global dot_byte: u8 = ".".as_bytes()[0];
+    // #[derive(Deserialize, Serialize)]
+    // pub struct DkimKeyRsa2048 {
+    //     domain: Fqdn,
+    //     selector: BoundedVec<u8, 63>,
+    //     key: [u8; 256]
+    // }
+    // global LenPackedDkimKeyRsa2048: u32 = 256 + 1 + FqdnMaxLen + 1 + 63;
+    // impl Packable<LenPackedDkimKeyRsa2048> for DkimKeyRsa2048 {
+    //     fn pack(self) -> [Field; LenPackedDkimKeyRsa2048] {
+    //         let l_domain = self.domain.len();
+    //         let l_selector = self.selector.len();
+    //         let mut r_domain = [0; FqdnMaxLen + 1];
+    //         for i in 0..l_domain {
+    //             r_domain[i] = self.domain.get(i) as Field;
+    //         }
+    //         r_domain[FqdnMaxLen] = l_domain as Field;
+    //         let mut r_selector = [0; 63 + 1];
+    //         for i in 0..l_selector {
+    //             r_selector[i] = self.selector.get(i) as Field;
+    //         }
+    //         r_selector[63] = l_selector as Field;
             
-            r_domain.concat(r_selector).concat(self.key.map(|b| b as Field))
-        }
-        fn unpack(packed: [Field; LenPackedDkimKeyRsa2048]) -> Self {
-            let mut d: [u8; FqdnMaxLen] = [0; FqdnMaxLen];
-            let mut s: [u8; 63] = [0; 63];
-            let mut key: [u8; 256] = [0; 256];
-            for i in 0..FqdnMaxLen {d[i] = packed[i] as u8;}
-            for i in 0..63 {s[i] = packed[i + FqdnMaxLen + 1] as u8;}
-            for i in 0..256 {
-                key[i] = packed[i + FqdnMaxLen + 1 + 63 + 1] as u8;
-            }
-            DkimKeyRsa2048{
-                domain: BoundedVec::from_parts_unchecked(d, packed[FqdnMaxLen] as u32),
-                selector: BoundedVec::from_parts_unchecked(s, packed[FqdnMaxLen + 1 + 63] as u32),
-                key
-            }
-        }
-    }
-    // #calculatonEstimation
-    #[derive(Deserialize, Serialize)]
-    pub struct DkimRecordRsa2048 {
-        bytes: BoundedVec<u8, 263 + FqdnMaxLen>,
-    }
-    #[public]
-    fn add_dkim_rsa2048_signed_ecdsa256sha256(
-        parts: DkimKeyRsa2048,
-        record: DkimRecordRsa2048,
-        dkim_key_position: u32,
-        rrsig: [u8; 64],
-        zsigk_x: [u8; 32],
-        zsigk_y: [u8; 32],
-    ) {
-        assert(storage.zonesigkey_64bytes.at(pedersen_hash(
-            Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}
-            .pack()
-        )).read());
+    //         r_domain.concat(r_selector).concat(self.key.map(|b| b as Field))
+    //     }
+    //     fn unpack(packed: [Field; LenPackedDkimKeyRsa2048]) -> Self {
+    //         let mut d: [u8; FqdnMaxLen] = [0; FqdnMaxLen];
+    //         let mut s: [u8; 63] = [0; 63];
+    //         let mut key: [u8; 256] = [0; 256];
+    //         for i in 0..FqdnMaxLen {d[i] = packed[i] as u8;}
+    //         for i in 0..63 {s[i] = packed[i + FqdnMaxLen + 1] as u8;}
+    //         for i in 0..256 {
+    //             key[i] = packed[i + FqdnMaxLen + 1 + 63 + 1] as u8;
+    //         }
+    //         DkimKeyRsa2048{
+    //             domain: BoundedVec::from_parts_unchecked(d, packed[FqdnMaxLen] as u32),
+    //             selector: BoundedVec::from_parts_unchecked(s, packed[FqdnMaxLen + 1 + 63] as u32),
+    //             key
+    //         }
+    //     }
+    // }
+    // // #calculatonEstimation
+    // #[derive(Deserialize, Serialize)]
+    // pub struct DkimRecordRsa2048 {
+    //     bytes: BoundedVec<u8, 263 + FqdnMaxLen>,
+    // }
+    // #[public]
+    // fn add_dkim_rsa2048_signed_ecdsa256sha256(
+    //     parts: DkimKeyRsa2048,
+    //     record: DkimRecordRsa2048,
+    //     dkim_key_position: u32,
+    //     rrsig: [u8; 64],
+    //     zsigk_x: [u8; 32],
+    //     zsigk_y: [u8; 32],
+    // ) {
+    //     assert(storage.zonesigkey_64bytes.at(pedersen_hash(
+    //         Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}
+    //         .pack()
+    //     )).read());
         
-        let mut record = record.bytes;
-        let l_selector = parts.selector.len();
-        // let index_dot_first = l_selector;
-        // let index_dkim_label = index_dot_first + 1;
-        // let index_dot_second = index_dot_first + 1 + 10;
-        // let index_domain_start = index_dot_second + 1;
-        for i in 0..l_selector {
-            record.set_unchecked(i, parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
-        }
-        record.set_unchecked(l_selector, dot_byte); 
-        // for i in ()..index_dot_second {
-        for i in 0..10 {
-            record.set_unchecked(i + l_selector + 1, dkim_label[i]); 
-        }
-        record.set_unchecked(l_selector + 1 + 10, dot_byte); 
-        // for i in ..( + index_domain_start) {
-        for i in 0..parts.domain.len() {
-            record.set_unchecked(i + l_selector + 1 + 10 + 1, parts.domain.get(i)); 
-        }
-        for i in 0..256 {
-            record.set_unchecked(i + dkim_key_position, parts.key[i]); 
-        }
+    //     let mut record = record.bytes;
+    //     let l_selector = parts.selector.len();
+    //     // let index_dot_first = l_selector;
+    //     // let index_dkim_label = index_dot_first + 1;
+    //     // let index_dot_second = index_dot_first + 1 + 10;
+    //     // let index_domain_start = index_dot_second + 1;
+    //     for i in 0..l_selector {
+    //         record.set_unchecked(i, parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
+    //     }
+    //     record.set_unchecked(l_selector, dot_byte); 
+    //     // for i in ()..index_dot_second {
+    //     for i in 0..10 {
+    //         record.set_unchecked(i + l_selector + 1, dkim_label[i]); 
+    //     }
+    //     record.set_unchecked(l_selector + 1 + 10, dot_byte); 
+    //     // for i in ..( + index_domain_start) {
+    //     for i in 0..parts.domain.len() {
+    //         record.set_unchecked(i + l_selector + 1 + 10 + 1, parts.domain.get(i)); 
+    //     }
+    //     for i in 0..256 {
+    //         record.set_unchecked(i + dkim_key_position, parts.key[i]); 
+    //     }
 
-        assert(std::ecdsa_secp256r1::verify_signature(
-            zsigk_x, zsigk_y,
-            rrsig, dep::sha256::sha256_var(
-                record.storage(), record.len() as u64
-            )
-        ));
+    //     let sig_check = std::ecdsa_secp256r1::verify_signature(
+    //         zsigk_x, zsigk_y,
+    //         rrsig, dep::sha256::sha256_var(
+    //             record.storage(), record.len() as u64
+    //         )
+    //     );
+    //     assert(sig_check);
 
-        storage.dkimkey_rsa2048.at(pedersen_hash(parts.pack())).write(true);
-    }
+    //     storage.dkimkey_rsa2048.at(pedersen_hash(parts.pack())).write(true);
+    // }
 
-    #[public]
-    fn check_rsa2048(the: DkimKeyRsa2048) {assert(storage.dkimkey_rsa2048.at(pedersen_hash(the.pack())).read());}
+    // #[public]
+    // fn check_rsa2048(the: DkimKeyRsa2048) {
+    //     assert(storage.dkimkey_rsa2048.at(pedersen_hash(the.pack())).read());
+    // }
     
     // TODO a lib function since adding a DKIM key which needs an additional trust assumption isn't acceptable; but quite verifiable as an addition
     // should only be used if the caller trusts the delegated domain

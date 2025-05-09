@@ -1,37 +1,35 @@
-// due to the bug with the RSA we don't need a function for a TLD yet; hence can think that DS is always a thing
-// use dep::bignum::{params::BigNumParams, RuntimeBigNum};
-
 #[dep::aztec::macros::aztec]
 pub contract Main {
     use std::meta::derive;
     use std::hash::pedersen_hash;
     use dep::aztec::macros::{
-        storage::storage, functions::{initializer, public, } // internal, private, utility, view
+        storage::storage, functions::{initializer, public}
     };
-    use dep::aztec::protocol_types::traits::{Packable, Deserialize, Serialize}; // , Hash, FromField, ToField, 
-    use dep::aztec::prelude::{Map, PublicMutable}; // PublicContext, PublicImmutable, 
+    // TODO `impl ToField` instead of Pedersen hashing each time
+    use dep::aztec::protocol_types::traits::{Packable, Deserialize, Serialize}; 
+    use dep::aztec::prelude::{Map, PublicMutable};
 
-    // TODO add `pub` and correct algorithm suffixes
-    // type P256Key = [u8; 64];
-    
     /// FQDN specified max. len. minus the _domaindkim_ specified part minus minimum selector can take
     global FQDN_LEN_MAX: u32 = 253 - 10 - 2;
     global DNSKEY_64_PACKED_LEN: u32 = 64 + 1 + FQDN_LEN_MAX;
+    global DKIM_KEY_RSA2048_PACKED_LEN: u32 = 256 + 1 + FQDN_LEN_MAX + 1 + 63;
+    // TODO make these normal constants instead of conversions
     global DKIM_LABEL: [u8; 10] = "_domainkey".as_bytes();
     global DOT_BYTE: u8 = ".".as_bytes()[0];
-    global DKIM_KEY_RSA2048_PACKED_LEN: u32 = 256 + 1 + FQDN_LEN_MAX + 1 + 63;
 
     type Fqdn = BoundedVec<u8, FQDN_LEN_MAX>; 
     
     /// estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype #calculatonEstimation
-    // The thing is RRSIG covers a whole RRset of the records of a type. The prototype handles only the kind of setup which have a couple of DNSKEY; actually this already covers most of the setups. But there's some ways to combine a big `RRset` 
-    // from parts with enough development invested in this. A straight-forward solution is to save tuples of records, iterate over those to get the digest, and wipe them.
+    // The thing is RRSIG covers a whole RRset of the records of a type. The prototype handles only the kind of 
+    // setup which have a couple of DNSKEY; actually this already covers most of the setups. But there's some ways 
+    // to combine a big `RRset` from parts with enough development invested in this. A straight-forward solution 
+    // is to save tuples of records, iterate over those to get the digest, and wipe them.
     // [A recommended DNSKEY RRset length maximum is 13 but some systems allow much higher (which open those for an attack).](https://datatracker.ietf.org/meeting/121/materials/slides-121-dnsop-sessb-dns-upper-limit-values-00) */
     #[derive(Deserialize, Serialize)]
-    pub struct DnskeyRecordSetBytes {bytes: BoundedVec<u8, 333 * 2>}
+    pub struct Ec256DnskeyRecordSetBytes {bytes: BoundedVec<u8, 333 * 2>}
     
     #[derive(Deserialize, Serialize)]
-    pub struct DsRecordSetBytes {bytes: BoundedVec<u8, 289 * 2>} // #calculatonEstimation
+    pub struct Ec256DsRecordSetBytes {bytes: BoundedVec<u8, 289 * 2>} // #calculatonEstimation
     
     #[derive(Deserialize, Serialize)]
     pub struct DkimKeyRsa2048 {
@@ -50,12 +48,12 @@ pub contract Main {
         domain: Fqdn, 
         key_x: [u8; 32],
         key_y: [u8; 32]
-        // tag: Field
+        // TODO can a key tag be useful in the project?
     }
-    // TODO quite some space for optimization here
-    /*      it's really awful now, but with packed string this would be orders better
-            also moving the keys itself to a distributed storage so that only digest and revocation live here 
-    while the key only enter as an argument */
+    
+    /* TODO quite some space for optimization here
+    it's really awful now, but with packed string this would be orders better */
+
     impl Packable<DNSKEY_64_PACKED_LEN> for Bytes64DnsKey {
         fn pack(self) -> [Field; DNSKEY_64_PACKED_LEN] {
             let l = self.domain.len();
@@ -122,7 +120,15 @@ pub contract Main {
 
     #[dep::aztec::macros::storage::storage]
     struct Storage<Context> {
-        keysigkey_64bytes: Map<
+        keysigkey: Map<
+            Field,
+            PublicMutable<
+                bool, // is *not* revoked
+                Context
+            >,
+            Context
+        >,
+        zonesigkey: Map<
             Field, // Bytes64DnsKey,
             PublicMutable<
                 bool, // is *not* revoked
@@ -130,15 +136,7 @@ pub contract Main {
             >,
             Context
         >,
-        zonesigkey_64bytes: Map<
-            Field, // Bytes64DnsKey,
-            PublicMutable<
-                bool, // is *not* revoked
-                Context
-            >,
-            Context
-        >,
-        dkimkey_rsa2048: Map<
+        dkimkey: Map<
             Field, // DkimKey,
             PublicMutable<
                 // (
@@ -226,7 +224,7 @@ pub contract Main {
                 53 as u8,
             ]
         }.pack();
-        storage.keysigkey_64bytes.at(pedersen_hash(the)).write(
+        storage.keysigkey.at(pedersen_hash(the)).write(
             // (
             //     the, 
                 true
@@ -235,7 +233,7 @@ pub contract Main {
     }
     
     #[public]
-    fn add_zsigk_len64_signed_ecdsa256sha256(
+    fn add_zsigk_len64_signed_ecdsap256sha256(
         // ksigk_x: [u8; 32],
         // ksigk_y: [u8; 32],
         // domain: Fqdn,
@@ -243,13 +241,13 @@ pub contract Main {
         domain_rrset_position: u32,
         ksigk_rrset_position: u32,
         // delegationsigner: _,
-        rrset_dnskey: DnskeyRecordSetBytes, 
+        rrset_dnskey: Ec256DnskeyRecordSetBytes, 
         rrsig_dnskey: [u8; 64],
         zsigk_x: [u8; 32],
         zsigk_y: [u8; 32],
         zsigk_rrset_position: u32,
     ) {
-        assert(storage.keysigkey_64bytes.at(pedersen_hash(ksigk.pack())).read(), "the key have been revoked or never added"); 
+        assert(storage.keysigkey.at(pedersen_hash(ksigk.pack())).read(), "the key have been revoked or never added"); 
 
         let mut rrset_dnskey = rrset_dnskey;
         for i in 0..ksigk.domain.len() {
@@ -271,21 +269,21 @@ pub contract Main {
             rrsig_dnskey, h
         ));
 
-        storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{
+        storage.zonesigkey.at(pedersen_hash(Bytes64DnsKey{
             domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y
         }.pack())).write(true);
     }
 
     #[public]
-    fn add_ds_ecdsa(
+    fn add_ksigk_ecdsap256sha256(
         parent_zsigk: Bytes64DnsKey,
-        rrset_ds: DsRecordSetBytes,
+        rrset_ds: Ec256DsRecordSetBytes,
         child_ksigk: Bytes64DnsKey,
         child_domain_position: u32,
         ksigk_rrset_position: u32,
         rrsig_ds: [u8; 64],
     ) {
-        assert(storage.zonesigkey_64bytes.at(pedersen_hash(parent_zsigk.pack())).read(), "the key have been revoked or never added"); 
+        assert(storage.zonesigkey.at(pedersen_hash(parent_zsigk.pack())).read(), "the key have been revoked or never added"); 
 
         let l_child = child_ksigk.domain.len();
         let l_parent = parent_zsigk.domain.len();
@@ -313,11 +311,11 @@ pub contract Main {
         );
         assert(sig_check);
 
-        storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
+        storage.keysigkey.at(pedersen_hash(child_ksigk.pack())).write(true);
     }
 
     #[public]
-    fn add_dkim_rsa2048_signed_ecdsa256sha256(
+    fn add_dkim_rsa2048_signed_ecdsap256sha256(
         parts: DkimKeyRsa2048,
         record: DkimRecordRsa2048,
         dkim_key_position: u32,
@@ -325,7 +323,7 @@ pub contract Main {
         zsigk_x: [u8; 32],
         zsigk_y: [u8; 32],
     ) {
-        assert(storage.zonesigkey_64bytes.at(pedersen_hash(
+        assert(storage.zonesigkey.at(pedersen_hash(
             Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}
             .pack()
         )).read());
@@ -361,12 +359,12 @@ pub contract Main {
         );
         assert(sig_check);
 
-        storage.dkimkey_rsa2048.at(pedersen_hash(parts.pack())).write(true);
+        storage.dkimkey.at(pedersen_hash(parts.pack())).write(true);
     }
 
     #[public]
     fn check_rsa2048(the: DkimKeyRsa2048) {
-        assert(storage.dkimkey_rsa2048.at(pedersen_hash(the.pack())).read());
+        assert(storage.dkimkey.at(pedersen_hash(the.pack())).read());
     }
     
     // TODO a lib function since adding a DKIM key which needs an additional trust assumption isn't acceptable; but quite verifiable as an addition

@@ -150,10 +150,11 @@ pub contract Main {
         >
     }
 
-    /// Starting with the "com." KSK; when RSA verifier will be fixed it should be "." KSK here.
+    /// Starting with the "com." KSK; when RSA 
+    /// verifier will be fixed it should be "." KSK here.
     #[public] #[initializer]
     fn initialize() {
-        let the = Bytes64DnsKey{
+        storage.keysigkey.at(pedersen_hash(Bytes64DnsKey{
             domain: BoundedVec::from_array("com.".as_bytes()),
             key_x: [
                 183 as u8,
@@ -223,24 +224,16 @@ pub contract Main {
                 8 as u8,
                 53 as u8,
             ]
-        }.pack();
-        storage.keysigkey.at(pedersen_hash(the)).write(
-            // (
-            //     the, 
-                true
-            // )
+        }.pack())).write(
+            true
         );
     }
     
     #[public]
     fn add_zsigk_len64_signed_ecdsap256sha256(
-        // ksigk_x: [u8; 32],
-        // ksigk_y: [u8; 32],
-        // domain: Fqdn,
         ksigk: Bytes64DnsKey,
         domain_rrset_position: u32,
         ksigk_rrset_position: u32,
-        // delegationsigner: _,
         rrset_dnskey: Ec256DnskeyRecordSetBytes, 
         rrsig_dnskey: [u8; 64],
         zsigk_x: [u8; 32],
@@ -260,13 +253,11 @@ pub contract Main {
             rrset_dnskey.bytes.set_unchecked(zsigk_rrset_position + i + 32, zsigk_y[i]);
         }
 
-        let h: [u8; 32] = dep::sha256::sha256_var(
-                rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len() as u64
-            );
         assert(std::ecdsa_secp256r1::verify_signature(
             // ksigk.key[0..32], ksigk.key[32..64], 
-            ksigk.key_x, ksigk.key_y,
-            rrsig_dnskey, h
+            ksigk.key_x, ksigk.key_y, rrsig_dnskey, dep::sha256::sha256_var(
+                rrset_dnskey.bytes.storage(), rrset_dnskey.bytes.len() as u64
+            )
         ));
 
         storage.zonesigkey.at(pedersen_hash(Bytes64DnsKey{
@@ -275,7 +266,7 @@ pub contract Main {
     }
 
     #[public]
-    fn add_ksigk_ecdsap256sha256(
+    fn add_ksigk_len64_signed_ecdsap256sha256(
         parent_zsigk: Bytes64DnsKey,
         rrset_ds: Ec256DsRecordSetBytes,
         child_ksigk: Bytes64DnsKey,
@@ -293,7 +284,6 @@ pub contract Main {
             rrset_ds.bytes.set_unchecked(i + child_domain_position, child_ksigk.domain.get(i));
         }
         for i in 0..l_parent {
-            // assert(parent_zsigk.domain.get(i) == child_ksigk.domain.get(i + l_child - l_parent), "DS must define a subdomain");
             rrset_ds.bytes.set_unchecked(
                 i + child_domain_position + l_child, parent_zsigk.domain.get(i)
             );
@@ -303,13 +293,11 @@ pub contract Main {
             rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i + 32, child_ksigk.key_y[i]);
         }
 
-        let sig_check = std::ecdsa_secp256r1::verify_signature(
-            parent_zsigk.key_x, parent_zsigk.key_y,
-            rrsig_ds, dep::sha256::sha256_var(
+        assert(std::ecdsa_secp256r1::verify_signature(
+            parent_zsigk.key_x, parent_zsigk.key_y, rrsig_ds, dep::sha256::sha256_var(
                 rrset_ds.bytes.storage(), rrset_ds.bytes.len() as u64
             )
-        );
-        assert(sig_check);
+        ));
 
         storage.keysigkey.at(pedersen_hash(child_ksigk.pack())).write(true);
     }
@@ -324,26 +312,19 @@ pub contract Main {
         zsigk_y: [u8; 32],
     ) {
         assert(storage.zonesigkey.at(pedersen_hash(
-            Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}
-            .pack()
+            Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}.pack()
         )).read());
         
         let mut record = record.bytes;
         let l_selector = parts.selector.len();
-        // let index_dot_first = l_selector;
-        // let index_DKIM_LABEL = index_dot_first + 1;
-        // let index_dot_second = index_dot_first + 1 + 10;
-        // let index_domain_start = index_dot_second + 1;
         for i in 0..l_selector {
             record.set_unchecked(i, parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
         }
         record.set_unchecked(l_selector, DOT_BYTE); 
-        // for i in ()..index_dot_second {
         for i in 0..10 {
             record.set_unchecked(i + l_selector + 1, DKIM_LABEL[i]); 
         }
         record.set_unchecked(l_selector + 1 + 10, DOT_BYTE); 
-        // for i in ..( + index_domain_start) {
         for i in 0..parts.domain.len() {
             record.set_unchecked(i + l_selector + 1 + 10 + 1, parts.domain.get(i)); 
         }
@@ -351,13 +332,11 @@ pub contract Main {
             record.set_unchecked(i + dkim_key_position, parts.key[i]); 
         }
 
-        let sig_check = std::ecdsa_secp256r1::verify_signature(
-            zsigk_x, zsigk_y,
-            rrsig, dep::sha256::sha256_var(
+        assert(std::ecdsa_secp256r1::verify_signature(
+            zsigk_x, zsigk_y, rrsig, dep::sha256::sha256_var(
                 record.storage(), record.len() as u64
             )
-        );
-        assert(sig_check);
+        ));
 
         storage.dkimkey.at(pedersen_hash(parts.pack())).write(true);
     }
@@ -366,12 +345,6 @@ pub contract Main {
     fn check_rsa2048(the: DkimKeyRsa2048) {
         assert(storage.dkimkey.at(pedersen_hash(the.pack())).read());
     }
-    
-    // TODO a lib function since adding a DKIM key which needs an additional trust assumption isn't acceptable; but quite verifiable as an addition
-    // should only be used if the caller trusts the delegated domain
-    // fn add_dkim_rsa2048_delegated_signed_ecdsa256sha256() {}
-
-    // AFAIK DKIM has no revokation mechanism so it can be done by revealing the private key to the contract publicly. Sadly privately won't make this as that would allow the key owner to mark it revoked for this contract only.
 }
 
 #[test]

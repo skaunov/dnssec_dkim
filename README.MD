@@ -3,6 +3,10 @@ Aztec Noir DNSSEC DKIM Registry
 
 A registry for verification of a DKIM key signature up to [the DNSSEC root]. The project stemmed from an idea of building a system which would onboard users to Aztec using emails, or any other open system relying on structured messaging, so the sender domains an user needs to verify is unknown beforehand.
 
+This primarily saves users from a situation when
+- the keys checked with ZK-email are rolled-over and verification doesn't pass until a contract owner introduce the new key (if ever),
+- a key are spooffed and any email attacker issues gets verified.
+
 [the DNSSEC root]: during the hackathon @skaunov identified and filed the bug in `noir_rsa` which prevents RSA RRSIG verification, hence "com." was chosen for the prototype instead of ".".
 
 ## Overview
@@ -15,16 +19,23 @@ This project implements a registry for DNSSEC (Domain Name System Security Exten
 - ECDSA Verification: Uses ECDSA with the secp256r1 curve for signature verification
 - RSA Support: Includes RSA 2048 key handling for DKIM records
 ### next steps
+so many since a lot of time sunk into DNS, DNSSEC, and adaptation to the difference from Alphabuild
 #### root management
 #### one algo of 13
 ECDSAP256SHA256
 #### CNAME 
-last day of submitting deadline
+On the very last day for NoirHack submission I understood how CNAME delegated DKIM works (early misconception evidence are burried in the commits) so it didn't make into the code obviously. This approach would require another record type function and the `Map` for it, but aside from this it works just the same as the straight-forward approach implemented.
 #### checking values like ZSK, KSK, ...
 does anyone need this?
 #### negations and time windows
 delegate then remove then delegate again
 #### revocations
+##### DKIM
+
+I couldn't find a specification for it. My guess the reason is the verification was designed to be done _on receive_ and just removing the key would be enough leaving only those who cached vulnerable for the TTL amount of time. But for a ZK-email based contract this would be a **disaster.**
+
+So the registry would need some kind of its own mechanism for this. For example presenting the private key to mark the DKIM-key revoked. The problem is that publishing the private key of a probably compromised public key can do more harm than good. In the same time it's not a great approach to allow revocation without publication of the private key since it can be used for censorship by the key owner. So DKIM `Map` should receive the second flag for a _weak revocation_ signalling that the key owner doesn't recommend using this key; respecting this is up to the caller of the contract. This weak revocation would be done by presentating private key privately; while ordinary revocation by presenting the private key via a public function -- and that would prevent further verification with this public key.
+
 ## Technical Details
 ### Key Types
 - Key Signing Keys (KSK): Used to sign other keys in the DNSSEC hierarchy

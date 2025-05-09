@@ -1,13 +1,8 @@
 // due to the bug with the RSA we don't need a function for a TLD yet; hence can think that DS is always a thing
 // use dep::bignum::{params::BigNumParams, RuntimeBigNum};
 
-use dep::aztec::macros::aztec;
-#[aztec]
+#[dep::aztec::macros::aztec]
 pub contract Main {
-    // fn double(x: Field) -> pub Field { x * 2 }
-    // fn triple(x: Field) -> pub Field { x * 3 }
-    // fn quadruple(x: Field) -> pub Field { double(double(x)) }
-
     use std::meta::derive;
     use std::hash::pedersen_hash;
     use dep::aztec::macros::{
@@ -18,82 +13,117 @@ pub contract Main {
 
     // TODO add `pub` and correct algorithm suffixes
     // type P256Key = [u8; 64];
-    // // #[derive(Hash)]
     
     /// FQDN specified max. len. minus the _domaindkim_ specified part minus minimum selector can take
-    global FqdnMaxLen: u32 = 253 - 10 - 2;
-    type Fqdn = BoundedVec<u8, FqdnMaxLen>; 
+    global FQDN_LEN_MAX: u32 = 253 - 10 - 2;
+    global DNSKEY_64_PACKED_LEN: u32 = 64 + 1 + FQDN_LEN_MAX;
+    global DKIM_LABEL: [u8; 10] = "_domainkey".as_bytes();
+    global DOT_BYTE: u8 = ".".as_bytes()[0];
+    global DKIM_KEY_RSA2048_PACKED_LEN: u32 = 256 + 1 + FQDN_LEN_MAX + 1 + 63;
+
+    type Fqdn = BoundedVec<u8, FQDN_LEN_MAX>; 
+    
+    /// estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype #calculatonEstimation
+    // The thing is RRSIG covers a whole RRset of the records of a type. The prototype handles only the kind of setup which have a couple of DNSKEY; actually this already covers most of the setups. But there's some ways to combine a big `RRset` 
+    // from parts with enough development invested in this. A straight-forward solution is to save tuples of records, iterate over those to get the digest, and wipe them.
+    // [A recommended DNSKEY RRset length maximum is 13 but some systems allow much higher (which open those for an attack).](https://datatracker.ietf.org/meeting/121/materials/slides-121-dnsop-sessb-dns-upper-limit-values-00) */
+    #[derive(Deserialize, Serialize)]
+    pub struct DnskeyRecordSetBytes {bytes: BoundedVec<u8, 333 * 2>}
+    
+    #[derive(Deserialize, Serialize)]
+    pub struct DsRecordSetBytes {bytes: BoundedVec<u8, 289 * 2>} // #calculatonEstimation
+    
+    #[derive(Deserialize, Serialize)]
+    pub struct DkimKeyRsa2048 {
+        domain: Fqdn,
+        selector: BoundedVec<u8, 63>,
+        key: [u8; 256]
+    }
+
+    #[derive(Deserialize, Serialize)]
+    pub struct DkimRecordRsa2048 {
+        bytes: BoundedVec<u8, 263 + FQDN_LEN_MAX>, // #calculatonEstimation
+    }
     
     #[derive(Deserialize, Serialize)]
     pub struct Bytes64DnsKey {
         domain: Fqdn, 
         key_x: [u8; 32],
         key_y: [u8; 32]
-        // validity_to_from: (Field, Field),
         // tag: Field
     }
     // TODO quite some space for optimization here
     /*      it's really awful now, but with packed string this would be orders better
             also moving the keys itself to a distributed storage so that only digest and revocation live here 
     while the key only enter as an argument */
-    global LenPacked64DnsKey: u32 = 64 + 1 + FqdnMaxLen;
-    impl Packable<LenPacked64DnsKey> for Bytes64DnsKey {
-        fn pack(self) -> [Field; LenPacked64DnsKey] {
+    impl Packable<DNSKEY_64_PACKED_LEN> for Bytes64DnsKey {
+        fn pack(self) -> [Field; DNSKEY_64_PACKED_LEN] {
             let l = self.domain.len();
-            let mut r = [0; LenPacked64DnsKey - 64];
+            let mut r = [0; DNSKEY_64_PACKED_LEN - 64];
             for i in 0..l {
                 r[i] = self.domain.get(i) as Field;
             }
-            r[FqdnMaxLen] = l as Field;
+            r[FQDN_LEN_MAX] = l as Field;
             
             r.concat(self.key_x.map(|b| b as Field)).concat(self.key_y.map(|b| b as Field))
         }
-        fn unpack(packed: [Field; LenPacked64DnsKey]) -> Self {
-            let mut d: [u8; FqdnMaxLen] = [0; FqdnMaxLen];
+        fn unpack(packed: [Field; DNSKEY_64_PACKED_LEN]) -> Self {
+            let mut d: [u8; FQDN_LEN_MAX] = [0; FQDN_LEN_MAX];
             let mut (key_x, key_y): ([u8; 32], [u8; 32]) = ([0; 32], [0; 32]);
-            for i in 0..FqdnMaxLen {d[i] = packed[i] as u8;}
+            for i in 0..FQDN_LEN_MAX {d[i] = packed[i] as u8;}
             for i in 0..32 {
-                key_x[i] = packed[i + FqdnMaxLen + 1] as u8;
-                key_y[i] = packed[i + FqdnMaxLen + 1 + 32] as u8;
+                key_x[i] = packed[i + FQDN_LEN_MAX + 1] as u8;
+                key_y[i] = packed[i + FQDN_LEN_MAX + 1 + 32] as u8;
             }
             Bytes64DnsKey{
                 domain: BoundedVec::from_parts_unchecked(
-                    // &packed[0..FqdnMaxLen].map(|e| e as u8).as_array(), 
-                    d, packed[FqdnMaxLen] as u32
+                    // &packed[0..FQDN_LEN_MAX].map(|e| e as u8).as_array(), 
+                    d, packed[FQDN_LEN_MAX] as u32
                 ),//.map(|e| e as u8), 
-                // key: &packed[(FqdnMaxLen + 1)..].map(|e| e as u8).as_array()
+                // key: &packed[(FQDN_LEN_MAX + 1)..].map(|e| e as u8).as_array()
                 key_x, key_y
             }
         }
     }
 
-    // // #[derive(Hash)]
-    // struct DkimKeySelectorId<NUM_LABELS: Field> {
-    //     selector: str, 
-    //     domain: Domain<NUM_LABELS>,
-    //     // (Field, Field) // Validity time window
-    // };
-    // // #[derive(Hash)]
-    // struct DkimKeyDefaultId<NUM_LABELS: Field> {
-    //     domain: Domain<NUM_LABELS>,
-    //     validity_to_from: (Field, Field),
-    // }
-    // // #[derive(Hash)]
-    // struct DsId<NUM_LABELS: Field> {
-    //     child: str,
-    //     parent: Domain<NUM_LABELS - 1>,
-    // }
-    // type DomainDigest = Field;
+    impl Packable<DKIM_KEY_RSA2048_PACKED_LEN> for DkimKeyRsa2048 {
+        fn pack(self) -> [Field; DKIM_KEY_RSA2048_PACKED_LEN] {
+            let l_domain = self.domain.len();
+            let l_selector = self.selector.len();
+            let mut r_domain = [0; FQDN_LEN_MAX + 1];
+            for i in 0..l_domain {
+                r_domain[i] = self.domain.get(i) as Field;
+            }
+            r_domain[FQDN_LEN_MAX] = l_domain as Field;
+            let mut r_selector = [0; 63 + 1];
+            for i in 0..l_selector {
+                r_selector[i] = self.selector.get(i) as Field;
+            }
+            r_selector[63] = l_selector as Field;
+            
+            r_domain.concat(r_selector).concat(self.key.map(|b| b as Field))
+        }
+        fn unpack(packed: [Field; DKIM_KEY_RSA2048_PACKED_LEN]) -> Self {
+            let mut d: [u8; FQDN_LEN_MAX] = [0; FQDN_LEN_MAX];
+            let mut s: [u8; 63] = [0; 63];
+            let mut key: [u8; 256] = [0; 256];
+            for i in 0..FQDN_LEN_MAX {d[i] = packed[i] as u8;}
+            for i in 0..63 {s[i] = packed[i + FQDN_LEN_MAX + 1] as u8;}
+            for i in 0..256 {
+                key[i] = packed[i + FQDN_LEN_MAX + 1 + 63 + 1] as u8;
+            }
+            DkimKeyRsa2048{
+                domain: BoundedVec::from_parts_unchecked(d, packed[FQDN_LEN_MAX] as u32),
+                selector: BoundedVec::from_parts_unchecked(s, packed[FQDN_LEN_MAX + 1 + 63] as u32),
+                key
+            }
+        }
+    }
 
     #[dep::aztec::macros::storage::storage]
     struct Storage<Context> {
-        // TODO I'm thinking about establish a bit complex tree structure and just provide getters for the API
-        // starting from `["com"]` TODO _from `[]`_
-        // as DNSSEC uses different algorithms a `Map` sig-key value is a `Vec<u8>` to represent all of them
         keysigkey_64bytes: Map<
-            // I thought to key the `Map` with (Fqdn, Ksigk), but there's [no `#[derive(Hash)]` anymore](https://discord.com/channels/1113924620781883405/1359702206873604260/1368975601767288902)
-            // Bytes64DnsKey,
-            Field,
+            Field, // Bytes64DnsKey,
             PublicMutable<
                 bool, // is *not* revoked
                 Context
@@ -101,8 +131,7 @@ pub contract Main {
             Context
         >,
         zonesigkey_64bytes: Map<
-            // Bytes64DnsKey,
-            Field,
+            Field, // Bytes64DnsKey,
             PublicMutable<
                 bool, // is *not* revoked
                 Context
@@ -110,8 +139,7 @@ pub contract Main {
             Context
         >,
         dkimkey_rsa2048: Map<
-            // DkimKey,
-            Field, 
+            Field, // DkimKey,
             PublicMutable<
                 // (
                     bool, // is *not* revoked
@@ -124,6 +152,7 @@ pub contract Main {
         >
     }
 
+    /// Starting with the "com." KSK; when RSA verifier will be fixed it should be "." KSK here.
     #[public] #[initializer]
     fn initialize() {
         let the = Bytes64DnsKey{
@@ -204,13 +233,6 @@ pub contract Main {
             // )
         );
     }
-
-    // estimation of max length of a DNSKEY record, can be calculated precisely beyond the prototype #calculatonEstimation
-    // a big reserved space, [a recommended maximum is 13 but some systems allow much higher (which open those for an attack)](https://datatracker.ietf.org/meeting/121/materials/slides-121-dnsop-sessb-dns-upper-limit-values-00)
-    #[derive(Deserialize, Serialize)]
-    pub struct DnskeyRecordSetBytes {bytes: BoundedVec<
-        u8, 333 // * 4 // * 8 // * 16 // TODO actually this already covers most of the setups, but there's some ways to combine a big `RRset` from parts with enough development invested in this
-    >}
     
     #[public]
     fn add_zsigk_len64_signed_ecdsa256sha256(
@@ -249,155 +271,103 @@ pub contract Main {
             rrsig_dnskey, h
         ));
 
-        // storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{
-        //     domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y
-        // }.pack())).write(true);
+        storage.zonesigkey_64bytes.at(pedersen_hash(Bytes64DnsKey{
+            domain: ksigk.domain, key_x: zsigk_x, key_y: zsigk_y
+        }.pack())).write(true);
     }
 
-    // // #calculatonEstimation
-    // #[derive(Deserialize, Serialize)]
-    // pub struct DsRecordSetBytes {bytes: BoundedVec<u8, 289 * 2>} // ~~feels like it makes no sense to design for more than one record in a set here~~ #singleDS
-    
-    // #[public]
-    // fn add_ds_ecdsa(
-    //     parent_zsigk: Bytes64DnsKey,
-    //     rrset_ds: DsRecordSetBytes,
-    //     child_ksigk: Bytes64DnsKey,
-    //     // ~~with #singleDS it's possible to say that the child domain position is `0`~~
-    //     child_domain_position: u32,
-    //     ksigk_rrset_position: u32,
-    //     rrsig_ds: [u8; 64],
-    // ) {
-    //     assert(storage.zonesigkey_64bytes.at(pedersen_hash(parent_zsigk.pack())).read(), "the key have been revoked or never added"); 
+    #[public]
+    fn add_ds_ecdsa(
+        parent_zsigk: Bytes64DnsKey,
+        rrset_ds: DsRecordSetBytes,
+        child_ksigk: Bytes64DnsKey,
+        child_domain_position: u32,
+        ksigk_rrset_position: u32,
+        rrsig_ds: [u8; 64],
+    ) {
+        assert(storage.zonesigkey_64bytes.at(pedersen_hash(parent_zsigk.pack())).read(), "the key have been revoked or never added"); 
 
-    //     let l_child = child_ksigk.domain.len();
-    //     let l_parent = parent_zsigk.domain.len();
-    //     // assert(".".as_bytes()[0] == child_ksigk.domain.get(l_child - l_parent), "DS must define a subdomain");
-    //     let mut rrset_ds = rrset_ds;
-    //     for i in 0..(l_child - l_parent) {
-    //         rrset_ds.bytes.set_unchecked(i + child_domain_position, child_ksigk.domain.get(i));
-    //     }
-    //     for i in 0..l_parent {
-    //         // assert(parent_zsigk.domain.get(i) == child_ksigk.domain.get(i + l_child - l_parent), "DS must define a subdomain");
-    //         rrset_ds.bytes.set_unchecked(
-    //             i + child_domain_position + l_child, parent_zsigk.domain.get(i)
-    //         );
-    //     }
-    //     for i in 0..32 {
-    //         rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i, child_ksigk.key_x[i]);
-    //         rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i + 32, child_ksigk.key_y[i]);
-    //     }
+        let l_child = child_ksigk.domain.len();
+        let l_parent = parent_zsigk.domain.len();
+        // assert(".".as_bytes()[0] == child_ksigk.domain.get(l_child - l_parent), "DS must define a subdomain");
+        let mut rrset_ds = rrset_ds;
+        for i in 0..(l_child - l_parent) {
+            rrset_ds.bytes.set_unchecked(i + child_domain_position, child_ksigk.domain.get(i));
+        }
+        for i in 0..l_parent {
+            // assert(parent_zsigk.domain.get(i) == child_ksigk.domain.get(i + l_child - l_parent), "DS must define a subdomain");
+            rrset_ds.bytes.set_unchecked(
+                i + child_domain_position + l_child, parent_zsigk.domain.get(i)
+            );
+        }
+        for i in 0..32 {
+            rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i, child_ksigk.key_x[i]);
+            rrset_ds.bytes.set_unchecked(ksigk_rrset_position + i + 32, child_ksigk.key_y[i]);
+        }
 
-    //     let sig_check = std::ecdsa_secp256r1::verify_signature(
-    //         parent_zsigk.key_x, parent_zsigk.key_y,
-    //         rrsig_ds, dep::sha256::sha256_var(
-    //             rrset_ds.bytes.storage(), rrset_ds.bytes.len() as u64
-    //         )
-    //     );
-    //     assert(sig_check);
+        let sig_check = std::ecdsa_secp256r1::verify_signature(
+            parent_zsigk.key_x, parent_zsigk.key_y,
+            rrsig_ds, dep::sha256::sha256_var(
+                rrset_ds.bytes.storage(), rrset_ds.bytes.len() as u64
+            )
+        );
+        assert(sig_check);
 
-    //     storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
-    // }
+        storage.keysigkey_64bytes.at(pedersen_hash(child_ksigk.pack())).write(true);
+    }
 
-    // global dkim_label: [u8; 10] = "_domainkey".as_bytes();
-    // global dot_byte: u8 = ".".as_bytes()[0];
-    // #[derive(Deserialize, Serialize)]
-    // pub struct DkimKeyRsa2048 {
-    //     domain: Fqdn,
-    //     selector: BoundedVec<u8, 63>,
-    //     key: [u8; 256]
-    // }
-    // global LenPackedDkimKeyRsa2048: u32 = 256 + 1 + FqdnMaxLen + 1 + 63;
-    // impl Packable<LenPackedDkimKeyRsa2048> for DkimKeyRsa2048 {
-    //     fn pack(self) -> [Field; LenPackedDkimKeyRsa2048] {
-    //         let l_domain = self.domain.len();
-    //         let l_selector = self.selector.len();
-    //         let mut r_domain = [0; FqdnMaxLen + 1];
-    //         for i in 0..l_domain {
-    //             r_domain[i] = self.domain.get(i) as Field;
-    //         }
-    //         r_domain[FqdnMaxLen] = l_domain as Field;
-    //         let mut r_selector = [0; 63 + 1];
-    //         for i in 0..l_selector {
-    //             r_selector[i] = self.selector.get(i) as Field;
-    //         }
-    //         r_selector[63] = l_selector as Field;
-            
-    //         r_domain.concat(r_selector).concat(self.key.map(|b| b as Field))
-    //     }
-    //     fn unpack(packed: [Field; LenPackedDkimKeyRsa2048]) -> Self {
-    //         let mut d: [u8; FqdnMaxLen] = [0; FqdnMaxLen];
-    //         let mut s: [u8; 63] = [0; 63];
-    //         let mut key: [u8; 256] = [0; 256];
-    //         for i in 0..FqdnMaxLen {d[i] = packed[i] as u8;}
-    //         for i in 0..63 {s[i] = packed[i + FqdnMaxLen + 1] as u8;}
-    //         for i in 0..256 {
-    //             key[i] = packed[i + FqdnMaxLen + 1 + 63 + 1] as u8;
-    //         }
-    //         DkimKeyRsa2048{
-    //             domain: BoundedVec::from_parts_unchecked(d, packed[FqdnMaxLen] as u32),
-    //             selector: BoundedVec::from_parts_unchecked(s, packed[FqdnMaxLen + 1 + 63] as u32),
-    //             key
-    //         }
-    //     }
-    // }
-    // // #calculatonEstimation
-    // #[derive(Deserialize, Serialize)]
-    // pub struct DkimRecordRsa2048 {
-    //     bytes: BoundedVec<u8, 263 + FqdnMaxLen>,
-    // }
-    // #[public]
-    // fn add_dkim_rsa2048_signed_ecdsa256sha256(
-    //     parts: DkimKeyRsa2048,
-    //     record: DkimRecordRsa2048,
-    //     dkim_key_position: u32,
-    //     rrsig: [u8; 64],
-    //     zsigk_x: [u8; 32],
-    //     zsigk_y: [u8; 32],
-    // ) {
-    //     assert(storage.zonesigkey_64bytes.at(pedersen_hash(
-    //         Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}
-    //         .pack()
-    //     )).read());
+    #[public]
+    fn add_dkim_rsa2048_signed_ecdsa256sha256(
+        parts: DkimKeyRsa2048,
+        record: DkimRecordRsa2048,
+        dkim_key_position: u32,
+        rrsig: [u8; 64],
+        zsigk_x: [u8; 32],
+        zsigk_y: [u8; 32],
+    ) {
+        assert(storage.zonesigkey_64bytes.at(pedersen_hash(
+            Bytes64DnsKey{domain: parts.domain, key_x: zsigk_x, key_y: zsigk_y}
+            .pack()
+        )).read());
         
-    //     let mut record = record.bytes;
-    //     let l_selector = parts.selector.len();
-    //     // let index_dot_first = l_selector;
-    //     // let index_dkim_label = index_dot_first + 1;
-    //     // let index_dot_second = index_dot_first + 1 + 10;
-    //     // let index_domain_start = index_dot_second + 1;
-    //     for i in 0..l_selector {
-    //         record.set_unchecked(i, parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
-    //     }
-    //     record.set_unchecked(l_selector, dot_byte); 
-    //     // for i in ()..index_dot_second {
-    //     for i in 0..10 {
-    //         record.set_unchecked(i + l_selector + 1, dkim_label[i]); 
-    //     }
-    //     record.set_unchecked(l_selector + 1 + 10, dot_byte); 
-    //     // for i in ..( + index_domain_start) {
-    //     for i in 0..parts.domain.len() {
-    //         record.set_unchecked(i + l_selector + 1 + 10 + 1, parts.domain.get(i)); 
-    //     }
-    //     for i in 0..256 {
-    //         record.set_unchecked(i + dkim_key_position, parts.key[i]); 
-    //     }
+        let mut record = record.bytes;
+        let l_selector = parts.selector.len();
+        // let index_dot_first = l_selector;
+        // let index_DKIM_LABEL = index_dot_first + 1;
+        // let index_dot_second = index_dot_first + 1 + 10;
+        // let index_domain_start = index_dot_second + 1;
+        for i in 0..l_selector {
+            record.set_unchecked(i, parts.selector.get_unchecked(i)); // TODO there were a lot of `get` to switch 
+        }
+        record.set_unchecked(l_selector, DOT_BYTE); 
+        // for i in ()..index_dot_second {
+        for i in 0..10 {
+            record.set_unchecked(i + l_selector + 1, DKIM_LABEL[i]); 
+        }
+        record.set_unchecked(l_selector + 1 + 10, DOT_BYTE); 
+        // for i in ..( + index_domain_start) {
+        for i in 0..parts.domain.len() {
+            record.set_unchecked(i + l_selector + 1 + 10 + 1, parts.domain.get(i)); 
+        }
+        for i in 0..256 {
+            record.set_unchecked(i + dkim_key_position, parts.key[i]); 
+        }
 
-    //     let sig_check = std::ecdsa_secp256r1::verify_signature(
-    //         zsigk_x, zsigk_y,
-    //         rrsig, dep::sha256::sha256_var(
-    //             record.storage(), record.len() as u64
-    //         )
-    //     );
-    //     assert(sig_check);
+        let sig_check = std::ecdsa_secp256r1::verify_signature(
+            zsigk_x, zsigk_y,
+            rrsig, dep::sha256::sha256_var(
+                record.storage(), record.len() as u64
+            )
+        );
+        assert(sig_check);
 
-    //     storage.dkimkey_rsa2048.at(pedersen_hash(parts.pack())).write(true);
-    // }
+        storage.dkimkey_rsa2048.at(pedersen_hash(parts.pack())).write(true);
+    }
 
-    // #[public]
-    // fn check_rsa2048(the: DkimKeyRsa2048) {
-    //     assert(storage.dkimkey_rsa2048.at(pedersen_hash(the.pack())).read());
-    // }
+    #[public]
+    fn check_rsa2048(the: DkimKeyRsa2048) {
+        assert(storage.dkimkey_rsa2048.at(pedersen_hash(the.pack())).read());
+    }
     
     // TODO a lib function since adding a DKIM key which needs an additional trust assumption isn't acceptable; but quite verifiable as an addition
     // should only be used if the caller trusts the delegated domain

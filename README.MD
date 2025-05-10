@@ -10,8 +10,9 @@ This primarily saves users from a situation when
 [the DNSSEC root]: during the hackathon @skaunov identified and filed the bug in `noir_rsa` which prevents RSA RRSIG verification, hence "com." was chosen for the prototype instead of ".".
 
 ## Overview
-This project implements a registry for DNSSEC (Domain Name System Security Extensions) and DKIM (DomainKeys Identified Mail) keys, allowing for cryptographic verification of a DKIM key for email authenticity. The contract maintains a chain of trust starting from trusted DNSSEC root key down to individual domain DKIM keys. Once a signed key was presented to the contract it stores it hashed identification parameters and anyone checking that key will be asserted that it's genuine.
+This project implements a registry for DNSSEC (Domain Name System Security Extensions) and DKIM (DomainKeys Identified Mail) keys, allowing for cryptographic verification of a DKIM key for email authenticity. The contract maintains a chain of trust starting from a trusted DNSSEC root key down to an individual domain DKIM keys selector, making this part of ZK-email secure as DNSSEC itself. Once a signed key was presented to the contract it stores it hashed identification parameters and anyone checking that key will be asserted that it's genuine.
 
+![the diagram](dnssec_dkim.jpg)
 ## Features
 This really is focused on one task: integrating this contract into ZK-email based contracts with a very simple call so that keys they use could be asserted when possible to be genuine. Adding a key takes much more convoluted calls and also takes some storage.
 ### next steps

@@ -1,7 +1,7 @@
 Aztec Noir DNSSEC DKIM Registry
 ===========
 
-A registry for verification of a DKIM key signature up to [the DNSSEC root]. The project stemmed from an idea of building a system which would onboard users to Aztec using emails, or any other open system relying on structured messaging, so the sender domains an user needs to verify is unknown beforehand.
+A registry for verification of a DKIM key signature up to [the DNSSEC root]. The project stemmed from an idea of building a system which would onboard users to Aztec using emails, or any other open system relying on structured messaging, so the sender domains an user needs to verify are unknown beforehand.
 
 This primarily saves users from a situation when
 - the keys checked with ZK-email are rolled-over and verification doesn't pass until a contract owner introduce the new key (if ever),
@@ -19,23 +19,23 @@ This section is long but important. A lot of time and effort sunk into learning 
 #### root management
 As much as this project solves DKIM keys management problem for DNSSEC domains, it actually reduces that to management of the DNSSEC root keys. But it's quite a smaller one: they're easily verifiable, rotated once in a few year, generated in advance, and can be added for the entire network via this contract. So they're perfect for management with any kind of simple DAO, Aztec, or another company.
 #### algorithms support
-DNSSEC has 13 algorithms which popularity looks like Pareto principle (where 20% of items covers 80% of cases). So it's easy to add other algorithms covering most popular setups. The fact of such a variety of algorithms makes the API inevitable bloated/fragmented. But the good news are that the implementations differs quite slightly and all the primitives seems to be available in Noir. The prototype implements ECDSAP256SHA256, which can be named second most useful, counting from the root. Root is secured with RSA, which Noir implementation had a bug which was filed to that library during the hackathon. (Also it should be noted that DKIM offers like two popular algorithms, where RSA dominates.)
+DNSSEC has 13 algorithms which popularity looks like Pareto principle (where 20% of items covers 80% of cases). So it's easy to add other algorithms covering most popular setups. The fact of such a variety of algorithms makes the API inevitable bloated/fragmented. But the good news are that the implementations differs quite slightly and all the primitives seems to be available in Noir. The prototype implements ECDSAP256SHA256, which can be named second most useful, counting from the root. Root is secured with RSA, which Noir implementation had a bug which was filed to that library during the hackathon. (Also it should be noted that DKIM offers couple of the algorithms, and RSA dominates there.)
 #### CNAME delegated DKIM
-On the very last day for NoirHack submission I understood how CNAME delegated DKIM works (early misconception evidence are burried in the commits) so it didn't make into the code obviously. This approach would require another record type function and the `Map` for it, but aside from this it works just the same as the straight-forward approach implemented.
+On the very last day for NoirHack submission I understood how CNAME delegated DKIM works (early misconception evidence are burried in the commits) so it didn't make into the code obviously. This approach would require another record type function and a `Map` for it, but aside from this it works just the same as the straight-forward approach implemented.
 #### negations and time windows
-The variation with delegation mentioned in the previous section sound simple, but actually it entails quite intricate cases which require to introduce manipulation with more complex data structures. Particularly to track when a key (record) was seen. (And as there's no dates attached to the keys itself, but only to the signatures it becomes estimating validity based on those.) So to process a situation when domain delegated DKIM management to another domain, then took that management to itself, and then delegated again it takes some data and development.
+The variation with delegation mentioned in the previous section sound simple, but actually it entails quite intricate cases which require to introduce manipulation with more complex data structures. Particularly to track when a key (record) was seen. (And as there's no dates attached to the keys itself, but only to the signatures that becomes estimating validity based on those.) So to process a situation when domain delegated DKIM management to another domain, then took that management to itself, and then delegated again it takes some data and development.
 
 #### revocations
-The inticate case mentioned in the previous section shows that CNAME implementation requires also NSEC implementation (which enables verification of a subdomain absence). But it also helpful in another often overlooked topic of key revocation. So NSEC also enables a selector shut down and verification of an email only for the moments before that. DNSSEC keys have their own revocation protocol. And DKIM deserves an entire subsection.
+The inticate case mentioned in the previous section shows that CNAME implementation requires also NSEC implementation (which enables verification of a subdomain absence). But it also instrumental in another often overlooked topic: key revocation. So NSEC also enables a selector shut down and verification of an email only for the time frames before that. DNSSEC keys have their own revocation protocol. And DKIM deserves an entire subsection.
 
 ##### DKIM
 
-I couldn't find a specification for it. My guess the reason is the verification was designed to be done _on receive_ and just removing the key would be enough leaving only those who cached vulnerable for the TTL amount of time. But for a ZK-email based contract this would be a **disaster.**
+I couldn't find a specification for its revoking. My guess the reason is the verification was designed to be done _on an email reception_ and just removing the key would be enough leaving only those who cached a vulnerable one for the TTL amount of time. But for a ZK-email based contract this would be a **disaster.**
 
-So the registry would need some kind of its own mechanism for this. For example presenting the private key to mark the DKIM-key revoked. The problem is that publishing the private key of a probably compromised public key can do more harm than good. In the same time it's not a great approach to allow revocation without publication of the private key since it can be used for censorship by the key owner. So DKIM `Map` should receive the second flag for a _weak revocation_ signalling that the key owner doesn't recommend using this key; respecting this is up to the caller of the contract. This weak revocation would be done by presentating private key privately; while ordinary revocation by presenting the private key via a public function -- and that would prevent further verification with this public key.
+So the registry would need some kind of its own mechanism for this. For example presenting the private key to mark the DKIM-key revoked. The problem is that publishing the private key of a probably compromised public key can do more harm than good. On the other hand it's not a great approach to allow revocation without publication of the private key since it can be used for censoring a contract by the key owner. So DKIM `Map` should receive the second flag for a _weak revocation_ signalling that the key owner doesn't recommend to use this key; respecting this is up to the caller of the contract. This weak revocation would be done by presentating private key privately; while ordinary revocation by presenting the private key via a public function -- and that would prevent further verifications with this public key.
 
 #### API to check DNSSEC keys
-It's easy to add functions to check domain keys (ZSK, KSK) like the DKIM check exposed. Those are used to enable registering a DKIM key in the contract. I would like to see a project/case which would need such functions.
+It's easy to add functions to check domain keys (ZSK, KSK) like the DKIM check exposed. Those are used internally while registering a DKIM key in the contract. I would like to see a project/case which would need such functions.
 
 ## Technical Details
 ### Key Types
@@ -47,7 +47,16 @@ It's easy to add functions to check domain keys (ZSK, KSK) like the DKIM check e
 - ECDSA with SHA-256 is covered in the prototype.
 - The contract handles bounded vectors to manage domain name and record size constraints
 - Maximum FQDN length is enforced according to DNS standards
+
 ### Testing
-The codebase includes test functions to verify the ECDSA signature verification for:
+
+Too close to the deadline a problem with `aztec-nargo compile` which is blocking adding proper testing via JS.
+
+links
+- https://discord.com/channels/1113924620781883405/1370010504394838138/1370333135744532572
+- https://discord.com/channels/1113924620781883405/1369696446596513792
+
+#### older tests
+The codebase includes test functions from an early stage when the code lived in a library crate, those allow to check some core values for the trust chain:
 - <PayPal.com> DKIM records and
 - ".com" DNSKEY records.
